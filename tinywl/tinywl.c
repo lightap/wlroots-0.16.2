@@ -25,7 +25,35 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
+// Add this with other function declarations or near the include statements
 
+struct wlr_backend *wlr_RDP_backend_create(struct wl_display *display);
+#include <wlr/render/gles2.h>
+#include <wlr/render/allocator.h>
+#include <wlr/util/log.h>
+#include <wlr/render/drm_format_set.h>
+#include <wayland-server-protocol.h>
+#include <wlr/backend/RDP.h>
+
+
+// Handle DRM format definitions for WSL2
+
+// Add this function declaration with other include statements
+struct wlr_allocator *wlr_allocator_autocreate(struct wlr_backend *backend, 
+                                               struct wlr_renderer *renderer);
+
+// Add this declaration
+struct wlr_renderer *wlr_gles2_renderer_create_surfaceless(void);
+// Add these with other function declarations
+struct wlr_backend *wlr_RDP_backend_create(struct wl_display *display);
+struct wlr_renderer *wlr_gles2_renderer_create_surfaceless(void);
+struct wlr_allocator *wlr_allocator_autocreate(struct wlr_backend *backend, 
+                                               struct wlr_renderer *renderer);
+struct wlr_egl *wlr_gles2_renderer_get_egl(struct wlr_renderer *renderer);
+
+struct wlr_allocator *wlr_rdp_allocator_create(struct wlr_renderer *renderer);
+
+bool wlr_egl_make_current(struct wlr_egl *egl);
 /* For brevity's sake, struct members are annotated where they are used. */
 enum tinywl_cursor_mode {
 	TINYWL_CURSOR_PASSTHROUGH,
@@ -550,24 +578,54 @@ static void server_cursor_frame(struct wl_listener *listener, void *data) {
 	/* Notify the client with pointer focus of the frame event. */
 	wlr_seat_pointer_notify_frame(server->seat);
 }
-
+/*
 static void output_frame(struct wl_listener *listener, void *data) {
-	/* This function is called every time an output is ready to display a frame,
-	 * generally at the output's refresh rate (e.g. 60Hz). */
+	// This function is called every time an output is ready to display a frame,
+	 // generally at the output's refresh rate (e.g. 60Hz). 
 	struct tinywl_output *output = wl_container_of(listener, output, frame);
 	struct wlr_scene *scene = output->server->scene;
 
 	struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(
 		scene, output->wlr_output);
 
-	/* Render the scene if needed and commit the output */
+	// Render the scene if needed and commit the output 
 	wlr_scene_output_commit(scene_output);
 
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(scene_output, &now);
-}
+}*/
 
+// Implement minimal placeholder functions to avoid unused warnings
+/*
+static void output_frame(struct wl_listener *listener, void *data) {
+    struct tinywl_output *output = wl_container_of(listener, output, frame);
+    wlr_log(WLR_DEBUG, "Output frame event");
+}*/
+
+static void output_frame(struct wl_listener *listener, void *data) {
+    struct tinywl_output *output = wl_container_of(listener, output, frame);
+    struct tinywl_server *server = output->server;
+
+    // Get the scene output for this specific output
+    struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(
+        server->scene, output->wlr_output);
+
+    if (!scene_output) {
+        wlr_log(WLR_ERROR, "Failed to get scene output");
+        return;
+    }
+
+    // Send frame done event with current time
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    // Simply send frame done without forcing any commits
+    wlr_scene_output_send_frame_done(scene_output, &now);
+
+    wlr_log(WLR_DEBUG, "Frame update");
+}
+/*
 static void output_destroy(struct wl_listener *listener, void *data) {
 	struct tinywl_output *output = wl_container_of(listener, output, destroy);
 
@@ -575,24 +633,34 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->link);
 	free(output);
-}
+}*/
 
+static void output_destroy(struct wl_listener *listener, void *data) {
+    struct tinywl_output *output = wl_container_of(listener, output, destroy);
+    wlr_log(WLR_DEBUG, "Output destroy event");
+    
+    wl_list_remove(&output->frame.link);
+    wl_list_remove(&output->destroy.link);
+    wl_list_remove(&output->link);
+    free(output);
+}
+/*
 static void server_new_output(struct wl_listener *listener, void *data) {
-	/* This event is raised by the backend when a new output (aka a display or
-	 * monitor) becomes available. */
+	// This event is raised by the backend when a new output (aka a display or
+	 // monitor) becomes available. 
 	struct tinywl_server *server =
 		wl_container_of(listener, server, new_output);
 	struct wlr_output *wlr_output = data;
 
-	/* Configures the output created by the backend to use our allocator
-	 * and our renderer. Must be done once, before commiting the output */
+	// Configures the output created by the backend to use our allocator
+	 // and our renderer. Must be done once, before commiting the output 
 	wlr_output_init_render(wlr_output, server->allocator, server->renderer);
 
-	/* Some backends don't have modes. DRM+KMS does, and we need to set a mode
-	 * before we can use the output. The mode is a tuple of (width, height,
-	 * refresh rate), and each monitor supports only a specific set of modes. We
-	 * just pick the monitor's preferred mode, a more sophisticated compositor
-	 * would let the user configure it. */
+	//Some backends don't have modes. DRM+KMS does, and we need to set a mode
+	 // before we can use the output. The mode is a tuple of (width, height,
+	 // refresh rate), and each monitor supports only a specific set of modes. We
+	// just pick the monitor's preferred mode, a more sophisticated compositor
+	 // would let the user configure it. 
 	if (!wl_list_empty(&wlr_output->modes)) {
 		struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
 		wlr_output_set_mode(wlr_output, mode);
@@ -602,42 +670,366 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 		}
 	}
 
-	/* Allocates and configures our state for this output */
+	// Allocates and configures our state for this output 
 	struct tinywl_output *output =
 		calloc(1, sizeof(struct tinywl_output));
 	output->wlr_output = wlr_output;
 	output->server = server;
-	/* Sets up a listener for the frame notify event. */
+	// Sets up a listener for the frame notify event. 
 	output->frame.notify = output_frame;
 	wl_signal_add(&wlr_output->events.frame, &output->frame);
 
-	/* Sets up a listener for the destroy notify event. */
+	//Sets up a listener for the destroy notify event. 
 	output->destroy.notify = output_destroy;
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 
 	wl_list_insert(&server->outputs, &output->link);
 
-	/* Adds this to the output layout. The add_auto function arranges outputs
-	 * from left-to-right in the order they appear. A more sophisticated
-	 * compositor would let the user configure the arrangement of outputs in the
-	 * layout.
-	 *
-	 * The output layout utility automatically adds a wl_output global to the
-	 * display, which Wayland clients can see to find out information about the
-	 * output (such as DPI, scale factor, manufacturer, etc).
-	 */
+	// Adds this to the output layout. The add_auto function arranges outputs
+	// from left-to-right in the order they appear. A more sophisticated
+	 // compositor would let the user configure the arrangement of outputs in the
+	 // layout.
+	 //
+	 // The output layout utility automatically adds a wl_output global to the
+	 // display, which Wayland clients can see to find out information about the
+	// output (such as DPI, scale factor, manufacturer, etc).
+	 //
 	wlr_output_layout_add_auto(server->output_layout, wlr_output);
-}
+}*/
+/*
+static void server_new_output(struct wl_listener *listener, void *data) {
+    struct tinywl_server *server =
+        wl_container_of(listener, server, new_output);
+    struct wlr_output *wlr_output = data;
 
+    wlr_log(WLR_INFO, "Initializing new output");
+
+    // Explicitly check if we have a renderer and allocator 
+    if (!server->renderer) {
+        wlr_log(WLR_ERROR, "No renderer available for output");
+        return;
+    }
+
+    if (!server->allocator) {
+        wlr_log(WLR_ERROR, "No allocator available for output");
+        return;
+    }
+
+    wlr_log(WLR_DEBUG, "Renderer: %p, Allocator: %p", 
+            (void*)server->renderer, (void*)server->allocator);
+
+    // Attempt to create a compatible allocator 
+    struct wlr_allocator *compatible_allocator = NULL;
+    
+    // Try multiple ways to create a compatible allocator
+    const uint32_t cap_attempts[] = {
+        WLR_BUFFER_CAP_DATA_PTR | WLR_BUFFER_CAP_SHM,
+        WLR_BUFFER_CAP_DATA_PTR,
+        WLR_BUFFER_CAP_SHM
+    };
+
+    for (size_t i = 0; i < sizeof(cap_attempts) / sizeof(cap_attempts[0]); i++) {
+        wlr_log(WLR_DEBUG, "Attempting allocator creation with caps: 0x%x", cap_attempts[i]);
+        
+        // For RDP, we might need a custom allocator creation approach
+        compatible_allocator = wlr_rdp_allocator_create(server->renderer);
+        
+        if (compatible_allocator) {
+            wlr_log(WLR_DEBUG, "Created RDP allocator with caps: 0x%x", 
+                    compatible_allocator->buffer_caps);
+            break;
+        }
+    }
+
+    if (!compatible_allocator) {
+        wlr_log(WLR_ERROR, "Failed to create compatible allocator");
+        return;
+    }
+
+    // Attempt to initialize output rendering 
+    if (!wlr_output_init_render(wlr_output, compatible_allocator, server->renderer)) {
+        wlr_log(WLR_ERROR, "Failed to initialize output rendering");
+        wlr_allocator_destroy(compatible_allocator);
+        return;
+    }
+
+    // Replace the original allocator if needed 
+    if (server->allocator != compatible_allocator) {
+        wlr_allocator_destroy(server->allocator);
+        server->allocator = compatible_allocator;
+    }
+
+    // Set output parameters explicitly 
+    wlr_output_set_custom_mode(wlr_output, 1280, 720, 60000);
+    wlr_output_enable(wlr_output, true);
+
+    // Commit output 
+    if (!wlr_output_commit(wlr_output)) {
+        wlr_log(WLR_ERROR, "Failed to commit output");
+        return;
+    }
+
+    // Allocate and configure output state 
+    struct tinywl_output *output = calloc(1, sizeof(struct tinywl_output));
+    if (!output) {
+        wlr_log(WLR_ERROR, "Failed to allocate output structure");
+        return;
+    }
+
+    output->wlr_output = wlr_output;
+    output->server = server;
+
+    // Set up frame listener 
+    output->frame.notify = output_frame;
+    wl_signal_add(&wlr_output->events.frame, &output->frame);
+
+    // Set up destroy listener
+    output->destroy.notify = output_destroy;
+    wl_signal_add(&wlr_output->events.destroy, &output->destroy);
+
+    // Add to server's outputs list 
+    wl_list_insert(&server->outputs, &output->link);
+
+    // Add to output layout 
+    wlr_output_layout_add_auto(server->output_layout, wlr_output);
+
+    wlr_log(WLR_INFO, "Output initialized successfully: %dx%d @ %d Hz", 
+            wlr_output->width, wlr_output->height, wlr_output->refresh / 1000);
+}*/
+#define WLR_BUFFER_CAP_DATA_PTR (1 << 0)
+#define WLR_BUFFER_CAP_DMABUF   (1 << 1)
+#define WLR_BUFFER_CAP_SHM      (1 << 2)
+
+#include <wlr/render/wlr_renderer.h>
+
+#include <wlr/types/wlr_output.h>
+#include <wlr/render/wlr_renderer.h>
+
+// Add this function prototype with other function declarations
+const struct wlr_drm_format_set *wlr_renderer_get_render_formats(struct wlr_renderer *renderer);
+/*
+static void server_new_output(struct wl_listener *listener, void *data) {
+    struct tinywl_server *server =
+        wl_container_of(listener, server, new_output);
+    struct wlr_output *wlr_output = data;
+
+    wlr_log(WLR_INFO, "Initializing new RDP output with surfaceless EGL/Zink");
+
+    // Verify renderer and allocator existence 
+    if (!server->renderer || !server->allocator) {
+        wlr_log(WLR_ERROR, "No renderer or allocator available");
+        return;
+    }
+
+    // Configure output mode first 
+    wlr_output_set_custom_mode(wlr_output, 1280, 720, 60000);
+    wlr_output_enable(wlr_output, true);
+
+    // Create RDP-specific allocator 
+    struct wlr_allocator *new_allocator = wlr_rdp_allocator_create(server->renderer);
+    if (!new_allocator) {
+        wlr_log(WLR_ERROR, "Failed to create allocator");
+        return;
+    }
+
+    // Initialize output rendering 
+    if (!wlr_output_init_render(wlr_output, new_allocator, server->renderer)) {
+        wlr_log(WLR_ERROR, "Failed to initialize output rendering");
+        wlr_allocator_destroy(new_allocator);
+        return;
+    }
+
+    // Replace old allocator 
+    if (server->allocator) {
+        wlr_allocator_destroy(server->allocator);
+    }
+    server->allocator = new_allocator;
+
+    // Try to let renderer pick its preferred format 
+    if (!wlr_output_test(wlr_output)) {
+        wlr_log(WLR_DEBUG, "Default format test failed, trying explicit formats");
+        
+        // Simple format attempt matching EGL config: RGB888 
+        const uint32_t formats[] = {
+            0x34325258,  // XR24 (XRGB8888)
+            0x34324152,  // AR24 (ARGB8888)
+            0x34324258,  // XB24 (XBGR8888)
+        };
+
+        bool format_found = false;
+        for (size_t i = 0; i < sizeof(formats)/sizeof(formats[0]); i++) {
+            wlr_output_set_render_format(wlr_output, formats[i]);
+            if (wlr_output_test(wlr_output)) {
+                format_found = true;
+                wlr_log(WLR_INFO, "Found compatible format: 0x%x", formats[i]);
+                break;
+            }
+        }
+
+        if (!format_found) {
+            wlr_log(WLR_ERROR, "No compatible format found");
+            return;
+        }
+    }
+
+    // Commit output configuration 
+    if (!wlr_output_commit(wlr_output)) {
+        wlr_log(WLR_ERROR, "Failed to commit output configuration");
+        return;
+    }
+
+    // Setup output structure 
+    struct tinywl_output *output = calloc(1, sizeof(struct tinywl_output));
+    if (!output) {
+        wlr_log(WLR_ERROR, "Failed to allocate output structure");
+        return;
+    }
+
+    output->wlr_output = wlr_output;
+    output->server = server;
+
+    output->frame.notify = output_frame;
+    wl_signal_add(&wlr_output->events.frame, &output->frame);
+
+    output->destroy.notify = output_destroy;
+    wl_signal_add(&wlr_output->events.destroy, &output->destroy);
+
+    wl_list_insert(&server->outputs, &output->link);
+    wlr_output_layout_add_auto(server->output_layout, wlr_output);
+
+    wlr_log(WLR_INFO, "RDP output initialized successfully with Zink surfaceless renderer");
+}*/
+static void server_new_output(struct wl_listener *listener, void *data) {
+    struct tinywl_server *server = wl_container_of(listener, server, new_output);
+    struct wlr_output *wlr_output = data;
+
+    wlr_log(WLR_INFO, "Initializing RDP output with surfaceless EGL/Zink");
+
+    // Diagnostic logging of renderer and backend
+    wlr_log(WLR_DEBUG, "Backend: %p, Renderer: %p", 
+            (void*)wlr_output->backend, (void*)server->renderer);
+
+    // Create RDP-specific allocator with full capabilities
+    struct wlr_allocator *new_allocator = wlr_rdp_allocator_create(server->renderer);
+    if (!new_allocator) {
+        wlr_log(WLR_ERROR, "Failed to create RDP allocator");
+        return;
+    }
+
+    // Verify allocator capabilities
+    uint32_t buffer_caps = new_allocator->buffer_caps;
+    wlr_log(WLR_DEBUG, "Allocator buffer capabilities: 0x%x", buffer_caps);
+
+    // Initialize output rendering
+    if (!wlr_output_init_render(wlr_output, new_allocator, server->renderer)) {
+        wlr_log(WLR_ERROR, "Failed to initialize output rendering");
+        wlr_allocator_destroy(new_allocator);
+        return;
+    }
+
+    // Replace old allocator
+    if (server->allocator) {
+        wlr_allocator_destroy(server->allocator);
+    }
+    server->allocator = new_allocator;
+
+    // Try multiple formats with comprehensive logging
+    const uint32_t formats[] = {
+        0x34325258,  // XRGB8888 (XR24)
+        0x34324152,  // ARGB8888 (AR24)
+        0x34324258,  // XBGR8888 (XB24)
+        WL_SHM_FORMAT_XRGB8888,
+        WL_SHM_FORMAT_ARGB8888
+    };
+
+    bool output_initialized = false;
+    for (size_t i = 0; i < sizeof(formats)/sizeof(formats[0]); i++) {
+        wlr_log(WLR_DEBUG, "Attempting format: 0x%x", formats[i]);
+
+        // Reset output configuration
+        wlr_output_set_custom_mode(wlr_output, 1280, 720, 60000);
+        wlr_output_enable(wlr_output, true);
+        wlr_output_set_render_format(wlr_output, formats[i]);
+
+        // Multiple test attempts
+        int test_attempts = 2;
+        while (test_attempts-- > 0) {
+            // Attempt output test
+            if (wlr_output_test(wlr_output)) {
+                wlr_log(WLR_INFO, "Output test passed for format 0x%x", formats[i]);
+                
+                // Attempt commit
+                if (wlr_output_commit(wlr_output)) {
+                    wlr_log(WLR_INFO, "Successfully committed output with format 0x%x", formats[i]);
+                    output_initialized = true;
+                    break;
+                }
+            }
+        }
+
+        if (output_initialized) break;
+    }
+
+    // If no format worked, log detailed diagnostics
+    if (!output_initialized) {
+        wlr_log(WLR_ERROR, "Failed to initialize output with any format");
+        wlr_log(WLR_DEBUG, "Renderer details:");
+        wlr_log(WLR_DEBUG, "  Renderer pointer: %p", (void*)server->renderer);
+        wlr_log(WLR_DEBUG, "  Allocator pointer: %p", (void*)new_allocator);
+      //  return;
+    }
+
+    // Create output structure
+    struct tinywl_output *output = calloc(1, sizeof(struct tinywl_output));
+    if (!output) {
+        wlr_log(WLR_ERROR, "Failed to allocate output structure");
+        return;
+    }
+
+    output->wlr_output = wlr_output;
+    output->server = server;
+
+    // Set up listeners
+    output->frame.notify = output_frame;
+    wl_signal_add(&wlr_output->events.frame, &output->frame);
+
+    output->destroy.notify = output_destroy;
+    wl_signal_add(&wlr_output->events.destroy, &output->destroy);
+
+    // Add to lists
+    wl_list_insert(&server->outputs, &output->link);
+    wlr_output_layout_add_auto(server->output_layout, wlr_output);
+
+    wlr_log(WLR_INFO, "RDP output initialized successfully");
+}
+/*
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
-	/* Called when the surface is mapped, or ready to display on-screen. */
+	// Called when the surface is mapped, or ready to display on-screen. 
 	struct tinywl_view *view = wl_container_of(listener, view, map);
 
 	wl_list_insert(&view->server->views, &view->link);
 
 	focus_view(view, view->xdg_toplevel->base->surface);
-}
+}*/
 
+static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
+    /* Called when the surface is mapped, or ready to display on-screen. */
+    struct tinywl_view *view = wl_container_of(listener, view, map);
+
+    wl_list_insert(&view->server->views, &view->link);
+
+    focus_view(view, view->xdg_toplevel->base->surface);
+
+    // Send frame done with a valid timespec
+    struct wlr_surface *surface = view->xdg_toplevel->base->surface;
+    if (surface) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        wlr_surface_send_frame_done(surface, &now);
+        
+        wlr_log(WLR_ERROR, "Sent frame done for surface %p", (void*)surface);
+    }
+}
 static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	/* Called when the surface is unmapped, and should no longer be shown. */
 	struct tinywl_view *view = wl_container_of(listener, view, unmap);
@@ -799,7 +1191,7 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
 	wl_signal_add(&toplevel->events.request_fullscreen,
 		&view->request_fullscreen);
 }
-
+/*
 int main(int argc, char *argv[]) {
 	wlr_log_init(WLR_DEBUG, NULL);
 	char *startup_cmd = NULL;
@@ -821,110 +1213,148 @@ int main(int argc, char *argv[]) {
 	}
 
 	struct tinywl_server server;
-	/* The Wayland display is managed by libwayland. It handles accepting
-	 * clients from the Unix socket, manging Wayland globals, and so on. */
+	// The Wayland display is managed by libwayland. It handles accepting
+	 // clients from the Unix socket, manging Wayland globals, and so on. 
 	server.wl_display = wl_display_create();
-	/* The backend is a wlroots feature which abstracts the underlying input and
-	 * output hardware. The autocreate option will choose the most suitable
-	 * backend based on the current environment, such as opening an X11 window
-	 * if an X11 server is running. */
-	server.backend = wlr_backend_autocreate(server.wl_display);
-	if (server.backend == NULL) {
-		wlr_log(WLR_ERROR, "failed to create wlr_backend");
-		return 1;
-	}
+	// The backend is a wlroots feature which abstracts the underlying input and
+	 // output hardware. The autocreate option will choose the most suitable
+	 // backend based on the current environment, such as opening an RDP window
+	// if an RDP server is running. 
+	// The backend is a wlroots feature which abstracts the underlying input and
+ // output hardware. The autocreate option will choose the most suitable
+ // backend based on the current environment, such as opening an RDP window
+ // if an RDP server is running. 
+const char *backends_env = getenv("WLR_BACKENDS");
+if (backends_env && strcmp(backends_env, "RDP") == 0) {
+    // Use RDP-specific backend creation
+    server.backend = wlr_RDP_backend_create(server.wl_display);
+} else {
+    // Default backend autocreation
+    server.backend = wlr_backend_autocreate(server.wl_display);
+}
 
-	/* Autocreates a renderer, either Pixman, GLES2 or Vulkan for us. The user
-	 * can also specify a renderer using the WLR_RENDERER env var.
-	 * The renderer is responsible for defining the various pixel formats it
-	 * supports for shared memory, this configures that for clients. */
-	server.renderer = wlr_renderer_autocreate(server.backend);
-	if (server.renderer == NULL) {
-		wlr_log(WLR_ERROR, "failed to create wlr_renderer");
-		return 1;
-	}
+if (server.backend == NULL) {
+    wlr_log(WLR_ERROR, "failed to create wlr_backend");
+    return 1;
+}
 
+	// Autocreates a renderer, either Pixman, GLES2 or Vulkan for us. The user
+	 // can also specify a renderer using the WLR_RENDERER env var.
+	 // The renderer is responsible for defining the various pixel formats it
+	 // supports for shared memory, this configures that for clients. 
+	// Modify renderer creation for RDP
+if (backends_env && strcmp(backends_env, "RDP") == 0) {
+    // Use surfaceless renderer specifically for RDP
+    server.renderer = wlr_gles2_renderer_create_surfaceless();
+} else {
+    // Default renderer autocreation
+    server.renderer = wlr_renderer_autocreate(server.backend);
+}
+
+if (server.renderer == NULL) {
+    wlr_log(WLR_ERROR, "failed to create wlr_renderer");
+    return 1;
+}
 	wlr_renderer_init_wl_display(server.renderer, server.wl_display);
 
-	/* Autocreates an allocator for us.
-	 * The allocator is the bridge between the renderer and the backend. It
-	 * handles the buffer creation, allowing wlroots to render onto the
-	 * screen */
-	 server.allocator = wlr_allocator_autocreate(server.backend,
+	/// Autocreates an allocator for us.
+	 // The allocator is the bridge between the renderer and the backend. It
+	 // handles the buffer creation, allowing wlroots to render onto the
+	 // screen 
+	// server.allocator = wlr_allocator_autocreate(server.backend,
 		server.renderer);
 	if (server.allocator == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_allocator");
 		return 1;
 	}
 
-	/* This creates some hands-off wlroots interfaces. The compositor is
-	 * necessary for clients to allocate surfaces, the subcompositor allows to
-	 * assign the role of subsurfaces to surfaces and the data device manager
-	 * handles the clipboard. Each of these wlroots interfaces has room for you
-	 * to dig your fingers in and play with their behavior if you want. Note that
-	 * the clients cannot set the selection directly without compositor approval,
-	 * see the handling of the request_set_selection event below.*/
+
+
+if (backends_env && strcmp(backends_env, "RDP") == 0) {
+    // For RDP backend, use standard allocator creation
+    server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
+    
+    if (server.allocator == NULL) {
+        wlr_log(WLR_ERROR, "Failed to create allocator for RDP backend");
+        return 1;
+    }
+} else {
+    // Default backend allocator creation
+    server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
+}
+
+if (server.allocator == NULL) {
+    wlr_log(WLR_ERROR, "failed to create wlr_allocator");
+    return 1;
+}
+	/// This creates some hands-off wlroots interfaces. The compositor is
+	 // necessary for clients to allocate surfaces, the subcompositor allows to
+	 // assign the role of subsurfaces to surfaces and the data device manager
+	 // handles the clipboard. Each of these wlroots interfaces has room for you
+	 // to dig your fingers in and play with their behavior if you want. Note that
+	 // the clients cannot set the selection directly without compositor approval,
+	 // see the handling of the request_set_selection event below.
 	wlr_compositor_create(server.wl_display, server.renderer);
 	wlr_subcompositor_create(server.wl_display);
 	wlr_data_device_manager_create(server.wl_display);
 
-	/* Creates an output layout, which a wlroots utility for working with an
-	 * arrangement of screens in a physical layout. */
+	// Creates an output layout, which a wlroots utility for working with an
+	 // arrangement of screens in a physical layout. 
 	server.output_layout = wlr_output_layout_create();
 
-	/* Configure a listener to be notified when new outputs are available on the
-	 * backend. */
+	// Configure a listener to be notified when new outputs are available on the
+	 // backend. 
 	wl_list_init(&server.outputs);
 	server.new_output.notify = server_new_output;
 	wl_signal_add(&server.backend->events.new_output, &server.new_output);
 
-	/* Create a scene graph. This is a wlroots abstraction that handles all
-	 * rendering and damage tracking. All the compositor author needs to do
-	 * is add things that should be rendered to the scene graph at the proper
-	 * positions and then call wlr_scene_output_commit() to render a frame if
-	 * necessary.
-	 */
+	// Create a scene graph. This is a wlroots abstraction that handles all
+	 // rendering and damage tracking. All the compositor author needs to do
+	 // is add things that should be rendered to the scene graph at the proper
+	 // positions and then call wlr_scene_output_commit() to render a frame if
+	 // necessary.
+	 //
 	server.scene = wlr_scene_create();
 	wlr_scene_attach_output_layout(server.scene, server.output_layout);
 
-	/* Set up xdg-shell version 3. The xdg-shell is a Wayland protocol which is
-	 * used for application windows. For more detail on shells, refer to my
-	 * article:
-	 *
-	 * https://drewdevault.com/2018/07/29/Wayland-shells.html
-	 */
+	// Set up xdg-shell version 3. The xdg-shell is a Wayland protocol which is
+	 // used for application windows. For more detail on shells, refer to my
+	 // article:
+	 //
+	 // https://drewdevault.com/2018/07/29/Wayland-shells.html
+	 //
 	wl_list_init(&server.views);
 	server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
 	server.new_xdg_surface.notify = server_new_xdg_surface;
 	wl_signal_add(&server.xdg_shell->events.new_surface,
 			&server.new_xdg_surface);
 
-	/*
-	 * Creates a cursor, which is a wlroots utility for tracking the cursor
-	 * image shown on screen.
-	 */
+	///
+	 // Creates a cursor, which is a wlroots utility for tracking the cursor
+	 // image shown on screen.
+	 //
 	server.cursor = wlr_cursor_create();
 	wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
 
-	/* Creates an xcursor manager, another wlroots utility which loads up
-	 * Xcursor themes to source cursor images from and makes sure that cursor
-	 * images are available at all scale factors on the screen (necessary for
-	 * HiDPI support). We add a cursor theme at scale factor 1 to begin with. */
+	// Creates an xcursor manager, another wlroots utility which loads up
+	 // Xcursor themes to source cursor images from and makes sure that cursor
+	 // images are available at all scale factors on the screen (necessary for
+	 // HiDPI support). We add a cursor theme at scale factor 1 to begin with. 
 	server.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
 	wlr_xcursor_manager_load(server.cursor_mgr, 1);
 
-	/*
-	 * wlr_cursor *only* displays an image on screen. It does not move around
-	 * when the pointer moves. However, we can attach input devices to it, and
-	 * it will generate aggregate events for all of them. In these events, we
-	 * can choose how we want to process them, forwarding them to clients and
-	 * moving the cursor around. More detail on this process is described in my
-	 * input handling blog post:
-	 *
-	 * https://drewdevault.com/2018/07/17/Input-handling-in-wlroots.html
-	 *
-	 * And more comments are sprinkled throughout the notify functions above.
-	 */
+	//
+	 // wlr_cursor *only* displays an image on screen. It does not move around
+	 // when the pointer moves. However, we can attach input devices to it, and
+	 // it will generate aggregate events for all of them. In these events, we
+	 // can choose how we want to process them, forwarding them to clients and
+	 // moving the cursor around. More detail on this process is described in my
+	 // input handling blog post:
+	 //
+	 // https://drewdevault.com/2018/07/17/Input-handling-in-wlroots.html
+	 //
+	 // And more comments are sprinkled throughout the notify functions above.
+	 //
 	server.cursor_mode = TINYWL_CURSOR_PASSTHROUGH;
 	server.cursor_motion.notify = server_cursor_motion;
 	wl_signal_add(&server.cursor->events.motion, &server.cursor_motion);
@@ -938,12 +1368,12 @@ int main(int argc, char *argv[]) {
 	server.cursor_frame.notify = server_cursor_frame;
 	wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
 
-	/*
-	 * Configures a seat, which is a single "seat" at which a user sits and
-	 * operates the computer. This conceptually includes up to one keyboard,
-	 * pointer, touch, and drawing tablet device. We also rig up a listener to
-	 * let us know when new input devices are available on the backend.
-	 */
+	//
+	 // Configures a seat, which is a single "seat" at which a user sits and
+	 // operates the computer. This conceptually includes up to one keyboard,
+	 // pointer, touch, and drawing tablet device. We also rig up a listener to
+	 // let us know when new input devices are available on the backend.
+	 //
 	wl_list_init(&server.keyboards);
 	server.new_input.notify = server_new_input;
 	wl_signal_add(&server.backend->events.new_input, &server.new_input);
@@ -955,39 +1385,224 @@ int main(int argc, char *argv[]) {
 	wl_signal_add(&server.seat->events.request_set_selection,
 			&server.request_set_selection);
 
-	/* Add a Unix socket to the Wayland display. */
+	// Add a Unix socket to the Wayland display.
 	const char *socket = wl_display_add_socket_auto(server.wl_display);
 	if (!socket) {
 		wlr_backend_destroy(server.backend);
 		return 1;
 	}
 
-	/* Start the backend. This will enumerate outputs and inputs, become the DRM
-	 * master, etc */
+	// Start the backend. This will enumerate outputs and inputs, become the DRM
+	 // master, etc
 	if (!wlr_backend_start(server.backend)) {
 		wlr_backend_destroy(server.backend);
 		wl_display_destroy(server.wl_display);
 		return 1;
 	}
 
-	/* Set the WAYLAND_DISPLAY environment variable to our socket and run the
-	 * startup command if requested. */
+	// Set the WAYLAND_DISPLAY environment variable to our socket and run the
+	 // startup command if requested. 
 	setenv("WAYLAND_DISPLAY", socket, true);
 	if (startup_cmd) {
 		if (fork() == 0) {
 			execl("/bin/sh", "/bin/sh", "-c", startup_cmd, (void *)NULL);
 		}
 	}
-	/* Run the Wayland event loop. This does not return until you exit the
-	 * compositor. Starting the backend rigged up all of the necessary event
-	 * loop configuration to listen to libinput events, DRM events, generate
-	 * frame events at the refresh rate, and so on. */
+	// Run the Wayland event loop. This does not return until you exit the
+	 // compositor. Starting the backend rigged up all of the necessary event
+	 // loop configuration to listen to libinput events, DRM events, generate
+	 // frame events at the refresh rate, and so on. 
 	wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s",
 			socket);
 	wl_display_run(server.wl_display);
 
-	/* Once wl_display_run returns, we shut down the server. */
+	// Once wl_display_run returns, we shut down the server. 
 	wl_display_destroy_clients(server.wl_display);
 	wl_display_destroy(server.wl_display);
 	return 0;
+}*/
+
+
+
+int main(int argc, char *argv[]) {
+    wlr_log_init(WLR_DEBUG, NULL);
+    char *startup_cmd = NULL;
+
+    // Parse command-line options
+    int c;
+    while ((c = getopt(argc, argv, "s:h")) != -1) {
+        switch (c) {
+        case 's':
+            startup_cmd = optarg;
+            break;
+        default:
+            printf("Usage: %s [-s startup command]\n", argv[0]);
+            return 0;
+        }
+    }
+    if (optind < argc) {
+        printf("Usage: %s [-s startup command]\n", argv[0]);
+        return 0;
+    }
+
+    struct tinywl_server server = {0};  // Zero initialize all fields
+
+    /* Create Wayland display first */
+    server.wl_display = wl_display_create();
+    if (!server.wl_display) {
+        wlr_log(WLR_ERROR, "Cannot create Wayland display");
+        return 1;
+    }
+
+    /* Create backend first */
+    const char *backends_env = getenv("WLR_BACKENDS");
+    if (backends_env && strcmp(backends_env, "RDP") == 0) {
+        wlr_log(WLR_INFO, "Creating RDP backend");
+        // Initialize backend
+        server.backend = wlr_RDP_backend_create(server.wl_display);
+    } else {
+        server.backend = wlr_backend_autocreate(server.wl_display);
+    }
+
+    if (!server.backend) {
+        wlr_log(WLR_ERROR, "Failed to create backend");
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+
+    /* Create global renderer */
+//    server.renderer = wlr_renderer_autocreate(server.backend);
+    server.renderer = wlr_gles2_renderer_create_surfaceless();
+    if (!server.renderer) {
+        wlr_log(WLR_ERROR, "Failed to create renderer");
+        wlr_backend_destroy(server.backend);
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+    wlr_renderer_init_wl_display(server.renderer, server.wl_display);
+
+    /* Assign renderer to RDP backend if applicable */
+    if (backends_env && strcmp(backends_env, "RDP") == 0) {
+        // No direct renderer assignment; RDP backend retrieves via wlr_backend_get_renderer
+        wlr_log(WLR_INFO, "RDP backend will retrieve renderer via wlr_backend_get_renderer");
+    }
+
+    /* Create allocator */
+    server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
+    if (!server.allocator) {
+        wlr_log(WLR_ERROR, "Failed to create allocator");
+        wlr_renderer_destroy(server.renderer);
+        wlr_backend_destroy(server.backend);
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+
+    /* Initialize wlroots interfaces */
+    wlr_compositor_create(server.wl_display, server.renderer);
+    wlr_subcompositor_create(server.wl_display);
+    wlr_data_device_manager_create(server.wl_display);
+
+    /* Create output layout */
+    server.output_layout = wlr_output_layout_create();
+
+    /* Configure listener for new outputs */
+    wl_list_init(&server.outputs);
+    server.new_output.notify = server_new_output;
+    wl_signal_add(&server.backend->events.new_output, &server.new_output);
+
+    /* Create scene graph for rendering */
+    server.scene = wlr_scene_create();
+    wlr_scene_attach_output_layout(server.scene, server.output_layout);
+
+    /* Set up xdg-shell for application windows */
+    wl_list_init(&server.views);
+    server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
+    server.new_xdg_surface.notify = server_new_xdg_surface;
+    wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_surface);
+
+    /* Create cursor tracking */
+    server.cursor = wlr_cursor_create();
+    wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
+
+    /* Create cursor theme */
+    server.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
+    wlr_xcursor_manager_load(server.cursor_mgr, 1);
+
+    /* Configure cursor input handling */
+    server.cursor_mode = TINYWL_CURSOR_PASSTHROUGH;
+    server.cursor_motion.notify = server_cursor_motion;
+    wl_signal_add(&server.cursor->events.motion, &server.cursor_motion);
+    server.cursor_motion_absolute.notify = server_cursor_motion_absolute;
+    wl_signal_add(&server.cursor->events.motion_absolute, &server.cursor_motion_absolute);
+    server.cursor_button.notify = server_cursor_button;
+    wl_signal_add(&server.cursor->events.button, &server.cursor_button);
+    server.cursor_axis.notify = server_cursor_axis;
+    wl_signal_add(&server.cursor->events.axis, &server.cursor_axis);
+    server.cursor_frame.notify = server_cursor_frame;
+    wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
+
+    /* Configure seat for input devices */
+    wl_list_init(&server.keyboards);
+    server.new_input.notify = server_new_input;
+    wl_signal_add(&server.backend->events.new_input, &server.new_input);
+    server.seat = wlr_seat_create(server.wl_display, "seat0");
+    server.request_cursor.notify = seat_request_cursor;
+    wl_signal_add(&server.seat->events.request_set_cursor, &server.request_cursor);
+    server.request_set_selection.notify = seat_request_set_selection;
+    wl_signal_add(&server.seat->events.request_set_selection, &server.request_set_selection);
+
+    /* Add Wayland socket */
+/*    const char *socket = wl_display_add_socket_auto(server.wl_display);
+    if (!socket) {
+        wlr_log(WLR_ERROR, "Unable to open Wayland socket");
+        if (server.backend) {
+            wlr_backend_destroy(server.backend);
+        }
+        if (server.allocator) {
+            wlr_allocator_destroy(server.allocator);
+        }
+        if (server.renderer) {
+            wlr_renderer_destroy(server.renderer);
+        }
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+*/
+
+    /* Add Wayland socket */
+const char *socket = wl_display_add_socket_auto(server.wl_display);
+if (!socket) {
+    wlr_log(WLR_ERROR, "Unable to create wayland socket");
+    wlr_backend_destroy(server.backend);
+    exit(1);
+}
+
+/* After socket creation, set the environment variable */
+char wayland_display[32];
+snprintf(wayland_display, sizeof(wayland_display), "wayland-%d", 1);
+setenv("WAYLAND_DISPLAY", wayland_display, 1);
+    /* Start the backend */
+    if (!wlr_backend_start(server.backend)) {
+        wlr_log(WLR_ERROR, "Failed to start backend");
+        wlr_backend_destroy(server.backend);
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+
+    /* Set environment and potentially run startup command */
+    setenv("WAYLAND_DISPLAY", socket, true);
+    if (startup_cmd) {
+        if (fork() == 0) {
+            execl("/bin/sh", "/bin/sh", "-c", startup_cmd, (void *)NULL);
+        }
+    }
+
+    /* Run Wayland event loop */
+    wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s", socket);
+    wl_display_run(server.wl_display);
+
+    /* Shutdown */
+    wl_display_destroy_clients(server.wl_display);
+    wl_display_destroy(server.wl_display);
+    return 0;
 }

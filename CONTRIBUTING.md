@@ -241,9 +241,9 @@ struct wlr_backend *wlr_backend_autocreate(struct wl_display *display) {
 		}
 	}
 
-	const char *x11_display = getenv("DISPLAY");
-	if (x11_display) {
-		return wlr_x11_backend_create(display, x11_display);
+	const char *RDP_display = getenv("DISPLAY");
+	if (RDP_display) {
+		return wlr_RDP_backend_create(display, RDP_display);
 	}
 
 	// Attempt DRM+libinput

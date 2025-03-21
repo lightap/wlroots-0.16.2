@@ -87,7 +87,7 @@ endif
 
 features = {
 	'drm-backend': false,
-	'x11-backend': false,
+	'RDP-backend': true,
 	'libinput-backend': false,
 	'xwayland': false,
 	'gles2-renderer': false,

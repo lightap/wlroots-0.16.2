@@ -8,7 +8,7 @@ xwayland_required = [
 	'xcb-xfixes',
 ]
 xwayland_optional = {
-	'xcb-errors': 'Required for printing X11 errors.',
+	'xcb-errors': 'Required for printing RDP errors.',
 }
 
 msg = []

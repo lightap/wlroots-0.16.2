@@ -114,4 +114,6 @@ bool wlr_egl_unset_current(struct wlr_egl *egl);
 
 bool wlr_egl_is_current(struct wlr_egl *egl);
 
+
+
 #endif

@@ -3,7 +3,7 @@ wlroots reads these environment variables
 # wlroots specific
 
 * *WLR_BACKENDS*: comma-separated list of backends to use (available backends:
-  libinput, drm, wayland, x11, headless)
+  libinput, drm, wayland, RDP, headless)
 * *WLR_NO_HARDWARE_CURSORS*: set to 1 to use software cursors instead of
   hardware cursors
 * *WLR_XWAYLAND*: specifies the path to an Xwayland binary to be used (instead
@@ -38,9 +38,9 @@ wlroots reads these environment variables
 
 * *WLR_WL_OUTPUTS*: when using the wayland backend specifies the number of outputs
 
-## X11 backend
+## RDP backend
 
-* *WLR_X11_OUTPUTS*: when using the X11 backend specifies the number of outputs
+* *WLR_RDP_OUTPUTS*: when using the RDP backend specifies the number of outputs
 
 ## gles2 renderer
 
@@ -59,7 +59,7 @@ wlroots reads these environment variables
 
 # Generic
 
-* *DISPLAY*: if set probe X11 backend in `wlr_backend_autocreate`
+* *DISPLAY*: if set probe RDP backend in `wlr_backend_autocreate`
 * *WAYLAND_DISPLAY*, *WAYLAND_SOCKET*: if set probe Wayland backend in
   `wlr_backend_autocreate`
 * *XCURSOR_PATH*: directory where xcursors are located

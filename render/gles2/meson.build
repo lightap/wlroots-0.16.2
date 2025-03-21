@@ -11,6 +11,7 @@ wlr_files += files(
 	'pixel_format.c',
 	'renderer.c',
 	'texture.c',
+	'surfaceless.c',
 )
 
 subdir('shaders')

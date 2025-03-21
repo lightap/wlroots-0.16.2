@@ -23,21 +23,21 @@
 #include <xcb/xinput.h>
 
 #include <wlr/backend/interface.h>
-#include <wlr/backend/x11.h>
+#include <wlr/backend/RDP.h>
 #include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/interfaces/wlr_pointer.h>
 #include <wlr/util/log.h>
 
-#include "backend/x11.h"
+#include "backend/RDP.h"
 #include "render/drm_format_set.h"
 
 // See dri2_format_for_depth in mesa
-const struct wlr_x11_format formats[] = {
+const struct wlr_RDP_format formats[] = {
 	{ .drm = DRM_FORMAT_XRGB8888, .depth = 24, .bpp = 32 },
 	{ .drm = DRM_FORMAT_ARGB8888, .depth = 32, .bpp = 32 },
 };
 
-static const struct wlr_x11_format *x11_format_from_depth(uint8_t depth) {
+static const struct wlr_RDP_format *RDP_format_from_depth(uint8_t depth) {
 	for (size_t i = 0; i < sizeof(formats) / sizeof(formats[0]); i++) {
 		if (formats[i].depth == depth) {
 			return &formats[i];
@@ -46,10 +46,10 @@ static const struct wlr_x11_format *x11_format_from_depth(uint8_t depth) {
 	return NULL;
 }
 
-struct wlr_x11_output *get_x11_output_from_window_id(
-		struct wlr_x11_backend *x11, xcb_window_t window) {
-	struct wlr_x11_output *output;
-	wl_list_for_each(output, &x11->outputs, link) {
+struct wlr_RDP_output *get_RDP_output_from_window_id(
+		struct wlr_RDP_backend *RDP, xcb_window_t window) {
+	struct wlr_RDP_output *output;
+	wl_list_for_each(output, &RDP->outputs, link) {
 		if (output->win == window) {
 			return output;
 		}
@@ -57,17 +57,17 @@ struct wlr_x11_output *get_x11_output_from_window_id(
 	return NULL;
 }
 
-static void handle_x11_error(struct wlr_x11_backend *x11, xcb_value_error_t *ev);
-static void handle_x11_unknown_event(struct wlr_x11_backend *x11,
+static void handle_RDP_error(struct wlr_RDP_backend *RDP, xcb_value_error_t *ev);
+static void handle_RDP_unknown_event(struct wlr_RDP_backend *RDP,
 	xcb_generic_event_t *ev);
 
-static void handle_x11_event(struct wlr_x11_backend *x11,
+static void handle_RDP_event(struct wlr_RDP_backend *RDP,
 		xcb_generic_event_t *event) {
 	switch (event->response_type & XCB_EVENT_RESPONSE_TYPE_MASK) {
 	case XCB_EXPOSE: {
 		xcb_expose_event_t *ev = (xcb_expose_event_t *)event;
-		struct wlr_x11_output *output =
-			get_x11_output_from_window_id(x11, ev->window);
+		struct wlr_RDP_output *output =
+			get_RDP_output_from_window_id(RDP, ev->window);
 		if (output != NULL) {
 			pixman_region32_union_rect(
 				&output->exposed, &output->exposed,
@@ -79,18 +79,18 @@ static void handle_x11_event(struct wlr_x11_backend *x11,
 	case XCB_CONFIGURE_NOTIFY: {
 		xcb_configure_notify_event_t *ev =
 			(xcb_configure_notify_event_t *)event;
-		struct wlr_x11_output *output =
-			get_x11_output_from_window_id(x11, ev->window);
+		struct wlr_RDP_output *output =
+			get_RDP_output_from_window_id(RDP, ev->window);
 		if (output != NULL) {
-			handle_x11_configure_notify(output, ev);
+			handle_RDP_configure_notify(output, ev);
 		}
 		break;
 	}
 	case XCB_CLIENT_MESSAGE: {
 		xcb_client_message_event_t *ev = (xcb_client_message_event_t *)event;
-		if (ev->data.data32[0] == x11->atoms.wm_delete_window) {
-			struct wlr_x11_output *output =
-				get_x11_output_from_window_id(x11, ev->window);
+		if (ev->data.data32[0] == RDP->atoms.wm_delete_window) {
+			struct wlr_RDP_output *output =
+				get_RDP_output_from_window_id(RDP, ev->window);
 			if (output != NULL) {
 				wlr_output_destroy(&output->wlr_output);
 			}
@@ -102,71 +102,71 @@ static void handle_x11_event(struct wlr_x11_backend *x11,
 	}
 	case XCB_GE_GENERIC: {
 		xcb_ge_generic_event_t *ev = (xcb_ge_generic_event_t *)event;
-		if (ev->extension == x11->xinput_opcode) {
-			handle_x11_xinput_event(x11, ev);
-		} else if (ev->extension == x11->present_opcode) {
-			handle_x11_present_event(x11, ev);
+		if (ev->extension == RDP->xinput_opcode) {
+			handle_RDP_xinput_event(RDP, ev);
+		} else if (ev->extension == RDP->present_opcode) {
+			handle_RDP_present_event(RDP, ev);
 		} else {
-			handle_x11_unknown_event(x11, event);
+			handle_RDP_unknown_event(RDP, event);
 		}
 		break;
 	}
 	case 0: {
 		xcb_value_error_t *ev = (xcb_value_error_t *)event;
-		handle_x11_error(x11, ev);
+		handle_RDP_error(RDP, ev);
 		break;
 	}
 	case XCB_UNMAP_NOTIFY:
 	case XCB_MAP_NOTIFY:
 		break;
 	default:
-		handle_x11_unknown_event(x11, event);
+		handle_RDP_unknown_event(RDP, event);
 		break;
 	}
 }
 
-static int x11_event(int fd, uint32_t mask, void *data) {
-	struct wlr_x11_backend *x11 = data;
+static int RDP_event(int fd, uint32_t mask, void *data) {
+	struct wlr_RDP_backend *RDP = data;
 
 	if ((mask & WL_EVENT_HANGUP) || (mask & WL_EVENT_ERROR)) {
 		if (mask & WL_EVENT_ERROR) {
-			wlr_log(WLR_ERROR, "Failed to read from X11 server");
+			wlr_log(WLR_ERROR, "Failed to read from RDP server");
 		}
-		wl_display_terminate(x11->wl_display);
+		wl_display_terminate(RDP->wl_display);
 		return 0;
 	}
 
 	xcb_generic_event_t *e;
-	while ((e = xcb_poll_for_event(x11->xcb))) {
-		handle_x11_event(x11, e);
+	while ((e = xcb_poll_for_event(RDP->xcb))) {
+		handle_RDP_event(RDP, e);
 		free(e);
 	}
 
-	int ret = xcb_connection_has_error(x11->xcb);
+	int ret = xcb_connection_has_error(RDP->xcb);
 	if (ret != 0) {
-		wlr_log(WLR_ERROR, "X11 connection error (%d)", ret);
-		wl_display_terminate(x11->wl_display);
+		wlr_log(WLR_ERROR, "RDP connection error (%d)", ret);
+		wl_display_terminate(RDP->wl_display);
 	}
 
 	return 0;
 }
 
-struct wlr_x11_backend *get_x11_backend_from_backend(
+struct wlr_RDP_backend *get_RDP_backend_from_backend(
 		struct wlr_backend *wlr_backend) {
-	assert(wlr_backend_is_x11(wlr_backend));
-	return (struct wlr_x11_backend *)wlr_backend;
+	assert(wlr_backend_is_RDP(wlr_backend));
+	return (struct wlr_RDP_backend *)wlr_backend;
 }
 
 static bool backend_start(struct wlr_backend *backend) {
-	struct wlr_x11_backend *x11 = get_x11_backend_from_backend(backend);
-	x11->started = true;
+	struct wlr_RDP_backend *RDP = get_RDP_backend_from_backend(backend);
+	RDP->started = true;
 
-	wlr_log(WLR_INFO, "Starting X11 backend");
+	wlr_log(WLR_INFO, "Starting RDP backend");
 
-	wl_signal_emit_mutable(&x11->backend.events.new_input, &x11->keyboard.base);
+	wl_signal_emit_mutable(&RDP->backend.events.new_input, &RDP->keyboard.base);
 
-	for (size_t i = 0; i < x11->requested_outputs; ++i) {
-		wlr_x11_output_create(&x11->backend);
+	for (size_t i = 0; i < RDP->requested_outputs; ++i) {
+		wlr_RDP_output_create(&RDP->backend);
 	}
 
 	return true;
@@ -177,45 +177,45 @@ static void backend_destroy(struct wlr_backend *backend) {
 		return;
 	}
 
-	struct wlr_x11_backend *x11 = get_x11_backend_from_backend(backend);
+	struct wlr_RDP_backend *RDP = get_RDP_backend_from_backend(backend);
 
-	struct wlr_x11_output *output, *tmp;
-	wl_list_for_each_safe(output, tmp, &x11->outputs, link) {
+	struct wlr_RDP_output *output, *tmp;
+	wl_list_for_each_safe(output, tmp, &RDP->outputs, link) {
 		wlr_output_destroy(&output->wlr_output);
 	}
 
-	wlr_keyboard_finish(&x11->keyboard);
+	wlr_keyboard_finish(&RDP->keyboard);
 
 	wlr_backend_finish(backend);
 
-	if (x11->event_source) {
-		wl_event_source_remove(x11->event_source);
+	if (RDP->event_source) {
+		wl_event_source_remove(RDP->event_source);
 	}
-	wl_list_remove(&x11->display_destroy.link);
+	wl_list_remove(&RDP->display_destroy.link);
 
-	wlr_drm_format_set_finish(&x11->primary_dri3_formats);
-	wlr_drm_format_set_finish(&x11->primary_shm_formats);
-	wlr_drm_format_set_finish(&x11->dri3_formats);
-	wlr_drm_format_set_finish(&x11->shm_formats);
+	wlr_drm_format_set_finish(&RDP->primary_dri3_formats);
+	wlr_drm_format_set_finish(&RDP->primary_shm_formats);
+	wlr_drm_format_set_finish(&RDP->dri3_formats);
+	wlr_drm_format_set_finish(&RDP->shm_formats);
 
 #if HAS_XCB_ERRORS
-	xcb_errors_context_free(x11->errors_context);
+	xcb_errors_context_free(RDP->errors_context);
 #endif
 
-	close(x11->drm_fd);
-	xcb_disconnect(x11->xcb);
-	free(x11);
+	close(RDP->drm_fd);
+	xcb_disconnect(RDP->xcb);
+	free(RDP);
 }
 
 static int backend_get_drm_fd(struct wlr_backend *backend) {
-	struct wlr_x11_backend *x11 = get_x11_backend_from_backend(backend);
-	return x11->drm_fd;
+	struct wlr_RDP_backend *RDP = get_RDP_backend_from_backend(backend);
+	return RDP->drm_fd;
 }
 
 static uint32_t get_buffer_caps(struct wlr_backend *backend) {
-	struct wlr_x11_backend *x11 = get_x11_backend_from_backend(backend);
-	return (x11->have_dri3 ? WLR_BUFFER_CAP_DMABUF : 0)
-		| (x11->have_shm ? WLR_BUFFER_CAP_SHM : 0);
+	struct wlr_RDP_backend *RDP = get_RDP_backend_from_backend(backend);
+	return (RDP->have_dri3 ? WLR_BUFFER_CAP_DMABUF : 0)
+		| (RDP->have_shm ? WLR_BUFFER_CAP_SHM : 0);
 }
 
 static const struct wlr_backend_impl backend_impl = {
@@ -225,14 +225,14 @@ static const struct wlr_backend_impl backend_impl = {
 	.get_buffer_caps = get_buffer_caps,
 };
 
-bool wlr_backend_is_x11(struct wlr_backend *backend) {
+bool wlr_backend_is_RDP(struct wlr_backend *backend) {
 	return backend->impl == &backend_impl;
 }
 
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
-	struct wlr_x11_backend *x11 =
-		wl_container_of(listener, x11, display_destroy);
-	backend_destroy(&x11->backend);
+	struct wlr_RDP_backend *RDP =
+		wl_container_of(listener, RDP, display_destroy);
+	backend_destroy(&RDP->backend);
 }
 
 static xcb_depth_t *get_depth(xcb_screen_t *screen, uint8_t depth) {
@@ -256,16 +256,16 @@ static xcb_visualid_t pick_visualid(xcb_depth_t *depth) {
 	return 0;
 }
 
-static int query_dri3_drm_fd(struct wlr_x11_backend *x11) {
+static int query_dri3_drm_fd(struct wlr_RDP_backend *RDP) {
 	xcb_dri3_open_cookie_t open_cookie =
-		xcb_dri3_open(x11->xcb, x11->screen->root, 0);
+		xcb_dri3_open(RDP->xcb, RDP->screen->root, 0);
 	xcb_dri3_open_reply_t *open_reply =
-		xcb_dri3_open_reply(x11->xcb, open_cookie, NULL);
+		xcb_dri3_open_reply(RDP->xcb, open_cookie, NULL);
 	if (open_reply == NULL) {
 		return -1;
 	}
 
-	int *open_fds = xcb_dri3_open_reply_fds(x11->xcb, open_reply);
+	int *open_fds = xcb_dri3_open_reply_fds(RDP->xcb, open_reply);
 	if (open_fds == NULL) {
 		free(open_reply);
 		return -1;
@@ -306,23 +306,23 @@ static int query_dri3_drm_fd(struct wlr_x11_backend *x11) {
 	return drm_fd;
 }
 
-static bool query_dri3_modifiers(struct wlr_x11_backend *x11,
-		const struct wlr_x11_format *format) {
-	if (x11->dri3_major_version == 1 && x11->dri3_minor_version < 2) {
+static bool query_dri3_modifiers(struct wlr_RDP_backend *RDP,
+		const struct wlr_RDP_format *format) {
+	if (RDP->dri3_major_version == 1 && RDP->dri3_minor_version < 2) {
 		return true; // GetSupportedModifiers requires DRI3 1.2
 	}
 
 	// Query the root window's supported modifiers, because we only care about
 	// screen_modifiers for now
 	xcb_dri3_get_supported_modifiers_cookie_t modifiers_cookie =
-		xcb_dri3_get_supported_modifiers(x11->xcb, x11->screen->root,
+		xcb_dri3_get_supported_modifiers(RDP->xcb, RDP->screen->root,
 		format->depth, format->bpp);
 	xcb_dri3_get_supported_modifiers_reply_t *modifiers_reply =
-		xcb_dri3_get_supported_modifiers_reply(x11->xcb, modifiers_cookie,
+		xcb_dri3_get_supported_modifiers_reply(RDP->xcb, modifiers_cookie,
 		NULL);
 	if (!modifiers_reply) {
 		wlr_log(WLR_ERROR, "Failed to get DMA-BUF modifiers supported by "
-			"the X11 server for the format 0x%"PRIX32, format->drm);
+			"the RDP server for the format 0x%"PRIX32, format->drm);
 		return false;
 	}
 
@@ -332,30 +332,30 @@ static bool query_dri3_modifiers(struct wlr_x11_backend *x11,
 	int modifiers_len =
 		xcb_dri3_get_supported_modifiers_screen_modifiers_length(modifiers_reply);
 	for (int i = 0; i < modifiers_len; i++) {
-		wlr_drm_format_set_add(&x11->dri3_formats, format->drm, modifiers[i]);
+		wlr_drm_format_set_add(&RDP->dri3_formats, format->drm, modifiers[i]);
 	}
 
 	free(modifiers_reply);
 	return true;
 }
 
-static bool query_formats(struct wlr_x11_backend *x11) {
-	xcb_depth_iterator_t iter = xcb_screen_allowed_depths_iterator(x11->screen);
+static bool query_formats(struct wlr_RDP_backend *RDP) {
+	xcb_depth_iterator_t iter = xcb_screen_allowed_depths_iterator(RDP->screen);
 	while (iter.rem > 0) {
 		uint8_t depth = iter.data->depth;
 
-		const struct wlr_x11_format *format = x11_format_from_depth(depth);
+		const struct wlr_RDP_format *format = RDP_format_from_depth(depth);
 		if (format != NULL) {
-			if (x11->have_shm) {
-				wlr_drm_format_set_add(&x11->shm_formats, format->drm,
+			if (RDP->have_shm) {
+				wlr_drm_format_set_add(&RDP->shm_formats, format->drm,
 					DRM_FORMAT_MOD_INVALID);
 			}
 
-			if (x11->have_dri3) {
-				// X11 always supports implicit modifiers
-				wlr_drm_format_set_add(&x11->dri3_formats, format->drm,
+			if (RDP->have_dri3) {
+				// RDP always supports implicit modifiers
+				wlr_drm_format_set_add(&RDP->dri3_formats, format->drm,
 					DRM_FORMAT_MOD_INVALID);
-				if (!query_dri3_modifiers(x11, format)) {
+				if (!query_dri3_modifiers(RDP, format)) {
 					return false;
 				}
 			}
@@ -367,11 +367,11 @@ static bool query_formats(struct wlr_x11_backend *x11) {
 	return true;
 }
 
-static void x11_get_argb32(struct wlr_x11_backend *x11) {
+static void RDP_get_argb32(struct wlr_RDP_backend *RDP) {
 	xcb_render_query_pict_formats_cookie_t cookie =
-		xcb_render_query_pict_formats(x11->xcb);
+		xcb_render_query_pict_formats(RDP->xcb);
 	xcb_render_query_pict_formats_reply_t *reply =
-		xcb_render_query_pict_formats_reply(x11->xcb, cookie, NULL);
+		xcb_render_query_pict_formats_reply(RDP->xcb, cookie, NULL);
 	if (!reply) {
 		wlr_log(WLR_ERROR, "Did not get any reply from xcb_render_query_pict_formats");
 		return;
@@ -386,27 +386,27 @@ static void x11_get_argb32(struct wlr_x11_backend *x11) {
 		return;
 	}
 
-	x11->argb32 = format->id;
+	RDP->argb32 = format->id;
 	free(reply);
 }
 
-struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
-		const char *x11_display) {
-	wlr_log(WLR_INFO, "Creating X11 backend");
+struct wlr_backend *wlr_RDP_backend_create(struct wl_display *display,
+		const char *RDP_display) {
+	wlr_log(WLR_INFO, "Creating RDP backend");
 
-	struct wlr_x11_backend *x11 = calloc(1, sizeof(*x11));
-	if (!x11) {
+	struct wlr_RDP_backend *RDP = calloc(1, sizeof(*RDP));
+	if (!RDP) {
 		return NULL;
 	}
 
-	wlr_backend_init(&x11->backend, &backend_impl);
-	x11->wl_display = display;
-	wl_list_init(&x11->outputs);
+	wlr_backend_init(&RDP->backend, &backend_impl);
+	RDP->wl_display = display;
+	wl_list_init(&RDP->outputs);
 
-	x11->xcb = xcb_connect(x11_display, NULL);
-	if (!x11->xcb || xcb_connection_has_error(x11->xcb)) {
+	RDP->xcb = xcb_connect(RDP_display, NULL);
+	if (!RDP->xcb || xcb_connection_has_error(RDP->xcb)) {
 		wlr_log(WLR_ERROR, "Failed to open xcb connection");
-		goto error_x11;
+		goto error_RDP;
 	}
 
 	struct {
@@ -414,21 +414,21 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 		xcb_intern_atom_cookie_t cookie;
 		xcb_atom_t *atom;
 	} atom[] = {
-		{ .name = "WM_PROTOCOLS", .atom = &x11->atoms.wm_protocols },
-		{ .name = "WM_DELETE_WINDOW", .atom = &x11->atoms.wm_delete_window },
-		{ .name = "_NET_WM_NAME", .atom = &x11->atoms.net_wm_name },
-		{ .name = "UTF8_STRING", .atom = &x11->atoms.utf8_string },
-		{ .name = "_VARIABLE_REFRESH", .atom = &x11->atoms.variable_refresh },
+		{ .name = "WM_PROTOCOLS", .atom = &RDP->atoms.wm_protocols },
+		{ .name = "WM_DELETE_WINDOW", .atom = &RDP->atoms.wm_delete_window },
+		{ .name = "_NET_WM_NAME", .atom = &RDP->atoms.net_wm_name },
+		{ .name = "UTF8_STRING", .atom = &RDP->atoms.utf8_string },
+		{ .name = "_VARIABLE_REFRESH", .atom = &RDP->atoms.variable_refresh },
 	};
 
 	for (size_t i = 0; i < sizeof(atom) / sizeof(atom[0]); ++i) {
-		atom[i].cookie = xcb_intern_atom(x11->xcb,
+		atom[i].cookie = xcb_intern_atom(RDP->xcb,
 			true, strlen(atom[i].name), atom[i].name);
 	}
 
 	for (size_t i = 0; i < sizeof(atom) / sizeof(atom[0]); ++i) {
 		xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(
-			x11->xcb, atom[i].cookie, NULL);
+			RDP->xcb, atom[i].cookie, NULL);
 
 		if (reply) {
 			*atom[i].atom = reply->atom;
@@ -442,69 +442,69 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 
 	// DRI3 extension
 
-	ext = xcb_get_extension_data(x11->xcb, &xcb_dri3_id);
+	ext = xcb_get_extension_data(RDP->xcb, &xcb_dri3_id);
 	if (ext && ext->present) {
 		xcb_dri3_query_version_cookie_t dri3_cookie =
-			xcb_dri3_query_version(x11->xcb, 1, 2);
+			xcb_dri3_query_version(RDP->xcb, 1, 2);
 		xcb_dri3_query_version_reply_t *dri3_reply =
-			xcb_dri3_query_version_reply(x11->xcb, dri3_cookie, NULL);
+			xcb_dri3_query_version_reply(RDP->xcb, dri3_cookie, NULL);
 		if (dri3_reply && dri3_reply->major_version >= 1) {
-			x11->have_dri3 = true;
-			x11->dri3_major_version = dri3_reply->major_version;
-			x11->dri3_minor_version = dri3_reply->minor_version;
+			RDP->have_dri3 = true;
+			RDP->dri3_major_version = dri3_reply->major_version;
+			RDP->dri3_minor_version = dri3_reply->minor_version;
 		} else {
-			wlr_log(WLR_INFO, "X11 does not support required DRI3 version "
+			wlr_log(WLR_INFO, "RDP does not support required DRI3 version "
 				"(has %"PRIu32".%"PRIu32", want 1.0)",
 				dri3_reply->major_version, dri3_reply->minor_version);
 		}
 		free(dri3_reply);
 	} else {
-		wlr_log(WLR_INFO, "X11 does not support DRI3 extension");
+		wlr_log(WLR_INFO, "RDP does not support DRI3 extension");
 	}
 
 	// SHM extension
 
-	ext = xcb_get_extension_data(x11->xcb, &xcb_shm_id);
+	ext = xcb_get_extension_data(RDP->xcb, &xcb_shm_id);
 	if (ext && ext->present) {
 		xcb_shm_query_version_cookie_t shm_cookie =
-			xcb_shm_query_version(x11->xcb);
+			xcb_shm_query_version(RDP->xcb);
 		xcb_shm_query_version_reply_t *shm_reply =
-			xcb_shm_query_version_reply(x11->xcb, shm_cookie, NULL);
+			xcb_shm_query_version_reply(RDP->xcb, shm_cookie, NULL);
 		if (shm_reply) {
 			if (shm_reply->major_version >= 1 || shm_reply->minor_version >= 2) {
 				if (shm_reply->shared_pixmaps) {
-					x11->have_shm = true;
+					RDP->have_shm = true;
 				} else {
-					wlr_log(WLR_INFO, "X11 does not support shared pixmaps");
+					wlr_log(WLR_INFO, "RDP does not support shared pixmaps");
 				}
 			} else {
-				wlr_log(WLR_INFO, "X11 does not support required SHM version "
+				wlr_log(WLR_INFO, "RDP does not support required SHM version "
 					"(has %"PRIu32".%"PRIu32", want 1.2)",
 					shm_reply->major_version, shm_reply->minor_version);
 			}
 		} else {
-			wlr_log(WLR_INFO, "X11 does not support required SHM version");
+			wlr_log(WLR_INFO, "RDP does not support required SHM version");
 		}
 		free(shm_reply);
 	} else {
-		wlr_log(WLR_INFO, "X11 does not support SHM extension");
+		wlr_log(WLR_INFO, "RDP does not support SHM extension");
 	}
 
 	// Present extension
 
-	ext = xcb_get_extension_data(x11->xcb, &xcb_present_id);
+	ext = xcb_get_extension_data(RDP->xcb, &xcb_present_id);
 	if (!ext || !ext->present) {
-		wlr_log(WLR_ERROR, "X11 does not support Present extension");
+		wlr_log(WLR_ERROR, "RDP does not support Present extension");
 		goto error_display;
 	}
-	x11->present_opcode = ext->major_opcode;
+	RDP->present_opcode = ext->major_opcode;
 
 	xcb_present_query_version_cookie_t present_cookie =
-		xcb_present_query_version(x11->xcb, 1, 2);
+		xcb_present_query_version(RDP->xcb, 1, 2);
 	xcb_present_query_version_reply_t *present_reply =
-		xcb_present_query_version_reply(x11->xcb, present_cookie, NULL);
+		xcb_present_query_version_reply(RDP->xcb, present_cookie, NULL);
 	if (!present_reply || present_reply->major_version < 1) {
-		wlr_log(WLR_ERROR, "X11 does not support required Present version "
+		wlr_log(WLR_ERROR, "RDP does not support required Present version "
 			"(has %"PRIu32".%"PRIu32", want 1.0)",
 			present_reply->major_version, present_reply->minor_version);
 		free(present_reply);
@@ -514,18 +514,18 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 
 	// Xfixes extension
 
-	ext = xcb_get_extension_data(x11->xcb, &xcb_xfixes_id);
+	ext = xcb_get_extension_data(RDP->xcb, &xcb_xfixes_id);
 	if (!ext || !ext->present) {
-		wlr_log(WLR_ERROR, "X11 does not support Xfixes extension");
+		wlr_log(WLR_ERROR, "RDP does not support Xfixes extension");
 		goto error_display;
 	}
 
 	xcb_xfixes_query_version_cookie_t fixes_cookie =
-		xcb_xfixes_query_version(x11->xcb, 4, 0);
+		xcb_xfixes_query_version(RDP->xcb, 4, 0);
 	xcb_xfixes_query_version_reply_t *fixes_reply =
-		xcb_xfixes_query_version_reply(x11->xcb, fixes_cookie, NULL);
+		xcb_xfixes_query_version_reply(RDP->xcb, fixes_cookie, NULL);
 	if (!fixes_reply || fixes_reply->major_version < 4) {
-		wlr_log(WLR_ERROR, "X11 does not support required Xfixes version "
+		wlr_log(WLR_ERROR, "RDP does not support required Xfixes version "
 			"(has %"PRIu32".%"PRIu32", want 4.0)",
 			fixes_reply->major_version, fixes_reply->minor_version);
 		free(fixes_reply);
@@ -535,19 +535,19 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 
 	// Xinput extension
 
-	ext = xcb_get_extension_data(x11->xcb, &xcb_input_id);
+	ext = xcb_get_extension_data(RDP->xcb, &xcb_input_id);
 	if (!ext || !ext->present) {
-		wlr_log(WLR_ERROR, "X11 does not support Xinput extension");
+		wlr_log(WLR_ERROR, "RDP does not support Xinput extension");
 		goto error_display;
 	}
-	x11->xinput_opcode = ext->major_opcode;
+	RDP->xinput_opcode = ext->major_opcode;
 
 	xcb_input_xi_query_version_cookie_t xi_cookie =
-		xcb_input_xi_query_version(x11->xcb, 2, 0);
+		xcb_input_xi_query_version(RDP->xcb, 2, 0);
 	xcb_input_xi_query_version_reply_t *xi_reply =
-		xcb_input_xi_query_version_reply(x11->xcb, xi_cookie, NULL);
+		xcb_input_xi_query_version_reply(RDP->xcb, xi_cookie, NULL);
 	if (!xi_reply || xi_reply->major_version < 2) {
-		wlr_log(WLR_ERROR, "X11 does not support required Xinput version "
+		wlr_log(WLR_ERROR, "RDP does not support required Xinput version "
 			"(has %"PRIu32".%"PRIu32", want 2.0)",
 			xi_reply->major_version, xi_reply->minor_version);
 		free(xi_reply);
@@ -555,55 +555,55 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 	}
 	free(xi_reply);
 
-	int fd = xcb_get_file_descriptor(x11->xcb);
+	int fd = xcb_get_file_descriptor(RDP->xcb);
 	struct wl_event_loop *ev = wl_display_get_event_loop(display);
 	uint32_t events = WL_EVENT_READABLE | WL_EVENT_ERROR | WL_EVENT_HANGUP;
-	x11->event_source = wl_event_loop_add_fd(ev, fd, events, x11_event, x11);
-	if (!x11->event_source) {
+	RDP->event_source = wl_event_loop_add_fd(ev, fd, events, RDP_event, RDP);
+	if (!RDP->event_source) {
 		wlr_log(WLR_ERROR, "Could not create event source");
 		goto error_display;
 	}
-	wl_event_source_check(x11->event_source);
+	wl_event_source_check(RDP->event_source);
 
-	x11->screen = xcb_setup_roots_iterator(xcb_get_setup(x11->xcb)).data;
-	if (!x11->screen) {
-		wlr_log(WLR_ERROR, "Failed to get X11 screen");
+	RDP->screen = xcb_setup_roots_iterator(xcb_get_setup(RDP->xcb)).data;
+	if (!RDP->screen) {
+		wlr_log(WLR_ERROR, "Failed to get RDP screen");
 		goto error_event;
 	}
 
-	x11->depth = get_depth(x11->screen, 24);
-	if (!x11->depth) {
-		wlr_log(WLR_ERROR, "Failed to get 24-bit depth for X11 screen");
+	RDP->depth = get_depth(RDP->screen, 24);
+	if (!RDP->depth) {
+		wlr_log(WLR_ERROR, "Failed to get 24-bit depth for RDP screen");
 		goto error_event;
 	}
 
-	x11->visualid = pick_visualid(x11->depth);
-	if (!x11->visualid) {
-		wlr_log(WLR_ERROR, "Failed to pick X11 visual");
+	RDP->visualid = pick_visualid(RDP->depth);
+	if (!RDP->visualid) {
+		wlr_log(WLR_ERROR, "Failed to pick RDP visual");
 		goto error_event;
 	}
 
-	x11->x11_format = x11_format_from_depth(x11->depth->depth);
-	if (!x11->x11_format) {
-		wlr_log(WLR_ERROR, "Unsupported depth %"PRIu8, x11->depth->depth);
+	RDP->RDP_format = RDP_format_from_depth(RDP->depth->depth);
+	if (!RDP->RDP_format) {
+		wlr_log(WLR_ERROR, "Unsupported depth %"PRIu8, RDP->depth->depth);
 		goto error_event;
 	}
 
-	x11->colormap = xcb_generate_id(x11->xcb);
-	xcb_create_colormap(x11->xcb, XCB_COLORMAP_ALLOC_NONE, x11->colormap,
-		x11->screen->root, x11->visualid);
+	RDP->colormap = xcb_generate_id(RDP->xcb);
+	xcb_create_colormap(RDP->xcb, XCB_COLORMAP_ALLOC_NONE, RDP->colormap,
+		RDP->screen->root, RDP->visualid);
 
-	if (!query_formats(x11)) {
+	if (!query_formats(RDP)) {
 		wlr_log(WLR_ERROR, "Failed to query supported DRM formats");
 		return false;
 	}
 
-	x11->drm_fd = -1;
-	if (x11->have_dri3) {
+	RDP->drm_fd = -1;
+	if (RDP->have_dri3) {
 		// DRI3 may return a render node (Xwayland) or an authenticated primary
 		// node (plain Glamor).
-		x11->drm_fd = query_dri3_drm_fd(x11);
-		if (x11->drm_fd < 0) {
+		RDP->drm_fd = query_dri3_drm_fd(RDP);
+		if (RDP->drm_fd < 0) {
 			wlr_log(WLR_ERROR, "Failed to query DRI3 DRM FD");
 			goto error_event;
 		}
@@ -612,87 +612,87 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 	// Windows can only display buffers with the depth they were created with
 	// TODO: look into changing the window's depth at runtime
 	const struct wlr_drm_format *dri3_format =
-		wlr_drm_format_set_get(&x11->dri3_formats, x11->x11_format->drm);
-	if (x11->have_dri3 && dri3_format != NULL) {
-		wlr_drm_format_set_add(&x11->primary_dri3_formats,
+		wlr_drm_format_set_get(&RDP->dri3_formats, RDP->RDP_format->drm);
+	if (RDP->have_dri3 && dri3_format != NULL) {
+		wlr_drm_format_set_add(&RDP->primary_dri3_formats,
 			dri3_format->format, DRM_FORMAT_MOD_INVALID);
 		for (size_t i = 0; i < dri3_format->len; i++) {
-			wlr_drm_format_set_add(&x11->primary_dri3_formats,
+			wlr_drm_format_set_add(&RDP->primary_dri3_formats,
 				dri3_format->format, dri3_format->modifiers[i]);
 		}
 	}
 
 	const struct wlr_drm_format *shm_format =
-		wlr_drm_format_set_get(&x11->shm_formats, x11->x11_format->drm);
-	if (x11->have_shm && shm_format != NULL) {
-		wlr_drm_format_set_add(&x11->primary_shm_formats,
+		wlr_drm_format_set_get(&RDP->shm_formats, RDP->RDP_format->drm);
+	if (RDP->have_shm && shm_format != NULL) {
+		wlr_drm_format_set_add(&RDP->primary_shm_formats,
 			shm_format->format, DRM_FORMAT_MOD_INVALID);
 	}
 
 #if HAS_XCB_ERRORS
-	if (xcb_errors_context_new(x11->xcb, &x11->errors_context) != 0) {
+	if (xcb_errors_context_new(RDP->xcb, &RDP->errors_context) != 0) {
 		wlr_log(WLR_ERROR, "Failed to create error context");
 		return false;
 	}
 #endif
 
-	wlr_keyboard_init(&x11->keyboard, &x11_keyboard_impl,
-		x11_keyboard_impl.name);
+	wlr_keyboard_init(&RDP->keyboard, &RDP_keyboard_impl,
+		RDP_keyboard_impl.name);
 
-	x11->display_destroy.notify = handle_display_destroy;
-	wl_display_add_destroy_listener(display, &x11->display_destroy);
+	RDP->display_destroy.notify = handle_display_destroy;
+	wl_display_add_destroy_listener(display, &RDP->display_destroy);
 
 	// Create an empty pixmap to be used as the cursor. The
 	// default GC foreground is 0, and that is what it will be
 	// filled with.
-	xcb_pixmap_t blank = xcb_generate_id(x11->xcb);
-	xcb_create_pixmap(x11->xcb, 1, blank, x11->screen->root, 1, 1);
-	xcb_gcontext_t gc = xcb_generate_id(x11->xcb);
-	xcb_create_gc(x11->xcb, gc, blank, 0, NULL);
+	xcb_pixmap_t blank = xcb_generate_id(RDP->xcb);
+	xcb_create_pixmap(RDP->xcb, 1, blank, RDP->screen->root, 1, 1);
+	xcb_gcontext_t gc = xcb_generate_id(RDP->xcb);
+	xcb_create_gc(RDP->xcb, gc, blank, 0, NULL);
 	xcb_rectangle_t rect = { .x = 0, .y = 0, .width = 1, .height = 1 };
-	xcb_poly_fill_rectangle(x11->xcb, blank, gc, 1, &rect);
+	xcb_poly_fill_rectangle(RDP->xcb, blank, gc, 1, &rect);
 
-	x11->transparent_cursor = xcb_generate_id(x11->xcb);
-	xcb_create_cursor(x11->xcb, x11->transparent_cursor, blank, blank,
+	RDP->transparent_cursor = xcb_generate_id(RDP->xcb);
+	xcb_create_cursor(RDP->xcb, RDP->transparent_cursor, blank, blank,
 		0, 0, 0, 0, 0, 0, 0, 0);
 
-	xcb_free_gc(x11->xcb, gc);
-	xcb_free_pixmap(x11->xcb, blank);
+	xcb_free_gc(RDP->xcb, gc);
+	xcb_free_pixmap(RDP->xcb, blank);
 
-	x11_get_argb32(x11);
+	RDP_get_argb32(RDP);
 
-	return &x11->backend;
+	return &RDP->backend;
 
 error_event:
-	wl_event_source_remove(x11->event_source);
+	wl_event_source_remove(RDP->event_source);
 error_display:
-	xcb_disconnect(x11->xcb);
-error_x11:
-	free(x11);
+	xcb_disconnect(RDP->xcb);
+error_RDP:
+	free(RDP);
 	return NULL;
 }
 
-static void handle_x11_error(struct wlr_x11_backend *x11, xcb_value_error_t *ev) {
+static void handle_RDP_error(struct wlr_RDP_backend *RDP, xcb_value_error_t *ev) {
 #if HAS_XCB_ERRORS
 	const char *major_name = xcb_errors_get_name_for_major_code(
-		x11->errors_context, ev->major_opcode);
+		RDP->errors_context, ev->major_opcode);
 	if (!major_name) {
-		wlr_log(WLR_DEBUG, "X11 error happened, but could not get major name");
+		wlr_log(WLR_DEBUG, "RDP error happened, but could not get major name");
 		goto log_raw;
 	}
 
 	const char *minor_name = xcb_errors_get_name_for_minor_code(
-		x11->errors_context, ev->major_opcode, ev->minor_opcode);
+		RDP->errors_context, ev->major_opcode, ev->minor_opcode);
 
 	const char *extension;
-	const char *error_name = xcb_errors_get_name_for_error(x11->errors_context,
+	const char *error_name = xcb_errors_get_name_for_error(RDP->errors_context,
 		ev->error_code, &extension);
 	if (!error_name) {
-		wlr_log(WLR_DEBUG, "X11 error happened, but could not get error name");
+		wlr_log(WLR_DEBUG, "RDP error happened, but could not get error name");
 		goto log_raw;
 	}
 
-	wlr_log(WLR_ERROR, "X11 error: op %s (%s), code %s (%s), "
+	wlr_log(WLR_ERROR, "RDP error: op %s (%s), code %s (%s), "
 		"sequence %"PRIu16", value %"PRIu32,
 		major_name, minor_name ? minor_name : "no minor",
 		error_name, extension ? extension : "no extension",
@@ -703,26 +703,26 @@ static void handle_x11_error(struct wlr_x11_backend *x11, xcb_value_error_t *ev)
 log_raw:
 #endif
 
-	wlr_log(WLR_ERROR, "X11 error: op %"PRIu8":%"PRIu16", code %"PRIu8", "
+	wlr_log(WLR_ERROR, "RDP error: op %"PRIu8":%"PRIu16", code %"PRIu8", "
 		"sequence %"PRIu16", value %"PRIu32,
 		ev->major_opcode, ev->minor_opcode, ev->error_code,
 		ev->sequence, ev->bad_value);
 }
 
-static void handle_x11_unknown_event(struct wlr_x11_backend *x11,
+static void handle_RDP_unknown_event(struct wlr_RDP_backend *RDP,
 		xcb_generic_event_t *ev) {
 #if HAS_XCB_ERRORS
 	const char *extension;
 	const char *event_name = xcb_errors_get_name_for_xcb_event(
-		x11->errors_context, ev, &extension);
+		RDP->errors_context, ev, &extension);
 	if (!event_name) {
 		wlr_log(WLR_DEBUG, "No name for unhandled event: %u",
 			ev->response_type);
 		return;
 	}
 
-	wlr_log(WLR_DEBUG, "Unhandled X11 event: %s (%u)", event_name, ev->response_type);
+	wlr_log(WLR_DEBUG, "Unhandled RDP event: %s (%u)", event_name, ev->response_type);
 #else
-	wlr_log(WLR_DEBUG, "Unhandled X11 event: %u", ev->response_type);
+	wlr_log(WLR_DEBUG, "Unhandled RDP event: %u", ev->response_type);
 #endif
 }

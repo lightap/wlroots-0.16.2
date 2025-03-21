@@ -14,9 +14,101 @@
 #include "types/wlr_region.h"
 #include "types/wlr_subcompositor.h"
 #include "util/time.h"
+#include <stdio.h>
+#include <freerdp/freerdp.h>
+#include <freerdp/version.h>
 
+#include <freerdp/freerdp.h>
+#include <freerdp/listener.h>
+#include <freerdp/update.h>
+#include <freerdp/input.h>
+#include <freerdp/codec/color.h>
+#include <freerdp/codec/rfx.h>
+#include <freerdp/codec/nsc.h>
+#include <freerdp/locale/keyboard.h>
+#include <freerdp/server/rail.h>
+#include <freerdp/server/drdynvc.h>
+#include <freerdp/server/rdpgfx.h>
+#include <freerdp/server/disp.h>
+#include <freerdp/server/rdpsnd.h>
+#include <freerdp/server/audin.h>
+#include <freerdp/server/cliprdr.h>
+#include <assert.h>
+#include <stdlib.h>
+#include <wayland-server-core.h>
+#include <wlr/render/interface.h>
+#include <wlr/types/wlr_buffer.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_matrix.h>
+#include <wlr/types/wlr_region.h>
+#include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_output.h>
+#include <wlr/util/log.h>
+#include <wlr/util/region.h>
+#include "types/wlr_buffer.h"
+#include "types/wlr_region.h"
+#include "types/wlr_subcompositor.h"
+#include "util/time.h"
+#include <stdio.h>
+#include <freerdp/freerdp.h>
+#include <freerdp/version.h>
+
+#include <freerdp/freerdp.h>
+#include <freerdp/listener.h>
+#include <freerdp/update.h>
+#include <freerdp/input.h>
+#include <freerdp/codec/color.h>
+#include <freerdp/codec/rfx.h>
+#include <freerdp/codec/nsc.h>
+#include <freerdp/locale/keyboard.h>
+#include <wlr/backend/RDP.h>
+
+#include <stdbool.h>
+#include <wlr/types/wlr_output.h>
+
+#define RDP_PEER_OUTPUT_ENABLED 0x0002
+
+struct rdp_peers_item {
+    void *peer;  // freerdp_peer* opaque type for compositor
+    uint32_t flags;
+    struct wl_list link;
+    void *seat;  // struct weston_seat* opaque type
+};
+
+struct rdp_peer_context {
+    void *context;  // rdpContext opaque type
+    void *backend;  // struct wlr_RDP_backend* opaque type
+    void *peer;     // freerdp_peer* opaque type
+    void *ctx;      // rdpContext* opaque type
+    void *update;   // rdpUpdate* opaque type
+    void *settings; // rdpSettings* opaque type
+    void *nsc_context; // NSC_CONTEXT* opaque type  
+    void *encode_stream; // wStream* opaque type
+    
+    void *vcm;  // Virtual channel manager opaque type
+    struct wl_event_source *events[32];  // Use MAX_FREERDP_FDS from RDP backend
+    int loop_task_event_source_fd;
+    struct wl_event_source *loop_task_event_source;
+    struct wl_list loop_task_list;
+    
+    struct rdp_peers_item item;
+
+    bool frame_ack_pending;
+    struct wl_event_source *frame_timer;
+    struct wlr_output *current_output;
+};
+
+// Function declarations (implemented in RDP backend)
+
+void rdp_transmit_surface(struct wlr_buffer *buffer);
+
+// Forward declaration - this function should be defined in the backend
+//freerdp_peer* get_global_rdp_peer(void);
 #define COMPOSITOR_VERSION 5
 #define CALLBACK_VERSION 1
+
+
+
 
 static int min(int fst, int snd) {
 	if (fst < snd) {
@@ -33,6 +125,44 @@ static int max(int fst, int snd) {
 		return snd;
 	}
 }
+
+//static freerdp_peer *global_rdp_peer = NULL;
+
+
+
+
+/*
+static void save_buffer_to_file(struct wlr_buffer *buffer) {
+    void *data;
+    uint32_t format;
+    size_t stride;
+    
+    if (!wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_READ, 
+                                         &data, &format, &stride)) {
+        wlr_log(WLR_ERROR, "Failed to access buffer data");
+        return;
+    }
+
+    char filename[100];
+    static int frame_count = 0;
+    snprintf(filename, sizeof(filename), "/tmp/frame_%d.raw", frame_count++);
+    
+    FILE *fp = fopen(filename, "wb");
+    if (fp) {
+        // Write buffer dimensions and format info
+        fprintf(fp, "Width: %d\nHeight: %d\nFormat: %x\nStride: %zu\n",
+                buffer->width, buffer->height, format, stride);
+        
+        // Write raw pixel data
+        size_t size = stride * buffer->height;
+        fwrite(data, 1, size, fp);
+        fclose(fp);
+        
+        wlr_log(WLR_INFO, "Saved buffer to %s", filename);
+    }
+
+    wlr_buffer_end_data_ptr_access(buffer);
+}*/
 
 static void surface_handle_destroy(struct wl_client *client,
 		struct wl_resource *resource) {
@@ -339,7 +469,7 @@ static void surface_state_move(struct wlr_surface_state *state,
 	state->cached_state_locks = next->cached_state_locks;
 	next->cached_state_locks = 0;
 }
-
+/*
 static void surface_apply_damage(struct wlr_surface *surface) {
 	if (surface->current.buffer == NULL) {
 		// NULL commit
@@ -350,6 +480,10 @@ static void surface_apply_damage(struct wlr_surface *surface) {
 		surface->opaque = false;
 		return;
 	}
+
+	 if (surface->current.buffer != NULL) {
+        save_buffer_to_file(surface->current.buffer);
+    }
 
 	surface->opaque = buffer_is_opaque(surface->current.buffer);
 
@@ -377,7 +511,8 @@ static void surface_apply_damage(struct wlr_surface *surface) {
 		wlr_buffer_unlock(&surface->buffer->base);
 	}
 	surface->buffer = buffer;
-}
+}*/
+
 
 static void surface_update_opaque_region(struct wlr_surface *surface) {
 	struct wlr_texture *texture = wlr_surface_get_texture(surface);
@@ -420,7 +555,7 @@ static void surface_cache_pending(struct wlr_surface *surface) {
 
 	surface->pending.seq++;
 }
-
+/*
 static void surface_commit_state(struct wlr_surface *surface,
 		struct wlr_surface_state *next) {
 	assert(next->cached_state_locks == 0);
@@ -428,6 +563,11 @@ static void surface_commit_state(struct wlr_surface *surface,
 	if (surface->role_data != NULL && surface->role->precommit != NULL) {
 		surface->role->precommit(surface, next);
 	}
+
+	 // Add near the start
+    if (next->buffer != NULL) {
+        save_buffer_to_file(next->buffer);
+    }
 
 	bool invalid_buffer = next->committed & WLR_SURFACE_STATE_BUFFER;
 
@@ -489,7 +629,320 @@ static void surface_commit_state(struct wlr_surface *surface,
 	}
 
 	wl_signal_emit_mutable(&surface->events.commit, surface);
+}*/
+/*
+static void surface_apply_damage(struct wlr_surface *surface) {
+    // Extensive logging for damage application
+    wlr_log(WLR_ERROR, "Applying surface damage");
+    
+    // Handle NULL buffer commit scenario
+    if (surface->current.buffer == NULL) {
+        if (surface->buffer != NULL) {
+            wlr_buffer_unlock(&surface->buffer->base);
+        }
+        surface->buffer = NULL;
+        surface->opaque = false;
+        return;
+    }
+
+    // Get RDP peer directly from header
+    freerdp_peer *peer = get_global_rdp_peer();
+    wlr_log(WLR_ERROR, "Current buffer: %p", (void*)surface->current.buffer);
+    wlr_log(WLR_ERROR, "RDP Peer: %p", (void*)peer);
+
+    // Enhanced RDP transmission
+    if (surface->current.buffer != NULL && peer != NULL) {
+        wlr_log(WLR_ERROR, "Transmitting surface buffer %p", 
+                (void*)surface->current.buffer);
+        rdp_transmit_surface(surface->current.buffer);
+    } else {
+        wlr_log(WLR_ERROR, "No RDP peer available for surface transmission");
+    }
+
+    // Rest of the damage application logic remains unchanged
+    surface->opaque = buffer_is_opaque(surface->current.buffer);
+
+    if (surface->buffer != NULL) {
+        if (wlr_client_buffer_apply_damage(surface->buffer,
+                surface->current.buffer, &surface->buffer_damage)) {
+            wlr_buffer_unlock(surface->current.buffer);
+            surface->current.buffer = NULL;
+            return;
+        }
+    }
+
+    struct wlr_client_buffer *buffer = wlr_client_buffer_create(
+            surface->current.buffer, surface->renderer);
+
+    wlr_buffer_unlock(surface->current.buffer);
+    surface->current.buffer = NULL;
+
+    if (buffer == NULL) {
+        wlr_log(WLR_ERROR, "Failed to create client buffer");
+        return;
+    }
+
+    if (surface->buffer != NULL) {
+        wlr_buffer_unlock(&surface->buffer->base);
+    }
+    surface->buffer = buffer;
+}*/
+/*
+static void surface_apply_damage(struct wlr_surface *surface) {
+    // Force damage on every surface commit
+    wlr_log(WLR_ERROR, "Applying surface damage");
+    
+    // Handle NULL buffer commit scenario
+    if (surface->current.buffer == NULL) {
+        if (surface->buffer != NULL) {
+            wlr_buffer_unlock(&surface->buffer->base);
+        }
+        surface->buffer = NULL;
+        surface->opaque = false;
+        return;
+    }
+
+    // Get RDP peer directly from header
+    freerdp_peer *peer = get_global_rdp_peer();
+    wlr_log(WLR_ERROR, "Current buffer: %p", (void*)surface->current.buffer);
+    wlr_log(WLR_ERROR, "RDP Peer: %p", (void*)peer);
+
+    // Always attempt transmission, ignoring previous focus restrictions
+    if (surface->current.buffer != NULL && peer != NULL) {
+        wlr_log(WLR_ERROR, "Forcibly transmitting surface buffer %p", 
+                (void*)surface->current.buffer);
+        rdp_transmit_surface(surface->current.buffer);
+    } else {
+        wlr_log(WLR_ERROR, "No RDP peer available for surface transmission");
+    }
+
+    // Rest of the damage application logic
+    surface->opaque = buffer_is_opaque(surface->current.buffer);
+    
+    if (surface->buffer != NULL) {
+        if (wlr_client_buffer_apply_damage(surface->buffer,
+                surface->current.buffer, &surface->buffer_damage)) {
+            wlr_buffer_unlock(surface->current.buffer);
+            surface->current.buffer = NULL;
+            return;
+        }
+    }
+
+    struct wlr_client_buffer *buffer = wlr_client_buffer_create(
+            surface->current.buffer, surface->renderer);
+    
+    wlr_buffer_unlock(surface->current.buffer);
+    surface->current.buffer = NULL;
+    
+    if (buffer == NULL) {
+        wlr_log(WLR_ERROR, "Failed to create client buffer");
+        return;
+    }
+    
+    if (surface->buffer != NULL) {
+        wlr_buffer_unlock(&surface->buffer->base);
+    }
+    
+    surface->buffer = buffer;
+}*/
+
+static void surface_apply_damage(struct wlr_surface *surface) {
+    // Handle NULL buffer commit scenario
+    if (surface->current.buffer == NULL) {
+        if (surface->buffer != NULL) {
+            wlr_buffer_unlock(&surface->buffer->base);
+        }
+        surface->buffer = NULL;
+        surface->opaque = false;
+        return;
+    }
+
+    // Additional logging for RDP transmission
+    wlr_log(WLR_DEBUG, "Applying surface damage: buffer=%p", 
+            (void*)surface->current.buffer);
+
+    // Attempt RDP transmission for every surface with a buffer
+    if (surface->current.buffer != NULL) {
+        void *current_peer = get_global_rdp_peer();
+        
+        wlr_log(WLR_DEBUG, "Current RDP peer for transmission: %p", 
+                (void*)current_peer);
+        
+        if (current_peer) {
+            rdp_transmit_surface(surface->current.buffer);
+            
+            // Handle frame sync
+            struct rdp_peer_context *peerCtx = 
+                (struct rdp_peer_context *)((freerdp_peer*)current_peer)->context;
+            
+            if (peerCtx && peerCtx->current_output) {
+                // Only send frame event if output is enabled
+                if (peerCtx->item.flags & RDP_PEER_OUTPUT_ENABLED) {
+                    wlr_output_send_frame(peerCtx->current_output);
+                    peerCtx->frame_ack_pending = false;
+                } else {
+                    peerCtx->frame_ack_pending = true;
+                }
+            }
+        } else {
+            wlr_log(WLR_ERROR, "No RDP peer available for surface transmission");
+        }
+    }
+
+    // Continue with existing damage handling...
+    // Determine surface opacity
+    surface->opaque = buffer_is_opaque(surface->current.buffer);
+
+    // Handle existing buffer
+    if (surface->buffer != NULL) {
+        if (wlr_client_buffer_apply_damage(surface->buffer,
+                surface->current.buffer, &surface->buffer_damage)) {
+            wlr_buffer_unlock(surface->current.buffer);
+            surface->current.buffer = NULL;
+            return;
+        }
+    }
+
+    // Create new client buffer
+    struct wlr_client_buffer *buffer = wlr_client_buffer_create(
+            surface->current.buffer, surface->renderer);
+
+    wlr_buffer_unlock(surface->current.buffer);
+    surface->current.buffer = NULL;
+
+    if (buffer == NULL) {
+        wlr_log(WLR_ERROR, "Failed to create client buffer");
+        return;
+    }
+
+    // Replace existing buffer
+    if (surface->buffer != NULL) {
+        wlr_buffer_unlock(&surface->buffer->base);
+    }
+    surface->buffer = buffer;
+
+    // Log successful buffer creation and damage application
+    wlr_log(WLR_DEBUG, "Surface damage applied successfully");
 }
+
+static void surface_commit_state(struct wlr_surface *surface,
+        struct wlr_surface_state *next) {
+    // Validate inputs
+    assert(next->cached_state_locks == 0);
+    
+    wlr_log(WLR_ERROR, "Surface commit state started for surface %p", (void*)surface);
+
+    // Precommit role-specific processing
+    if (surface->role_data != NULL && surface->role->precommit != NULL) {
+        wlr_log(WLR_ERROR, "Calling precommit for surface role");
+        surface->role->precommit(surface, next);
+    }
+
+    // Enhanced RDP transmission logging
+    wlr_log(WLR_ERROR, "Checking for RDP transmission");
+    wlr_log(WLR_ERROR, "Global RDP Peer: %p", (void*)global_rdp_peer);
+
+    // RDP transmission with comprehensive logging
+    if (next->buffer != NULL) {
+        if (global_rdp_peer) {
+            wlr_log(WLR_ERROR, "Attempting to transmit surface buffer %p", (void*)next->buffer);
+            rdp_transmit_surface(next->buffer);
+        } else {
+            wlr_log(WLR_ERROR, "No RDP peer available for surface transmission during commit");
+        }
+    }
+
+    // Determine if buffer is invalid
+    bool invalid_buffer = next->committed & WLR_SURFACE_STATE_BUFFER;
+
+    // Update surface position
+    surface->sx += next->dx;
+    surface->sy += next->dy;
+
+    // Update buffer damage
+    wlr_log(WLR_ERROR, "Updating buffer damage");
+    surface_update_damage(&surface->buffer_damage, &surface->current, next);
+
+    // Clear external damage
+    wlr_log(WLR_ERROR, "Clearing external damage");
+    pixman_region32_clear(&surface->external_damage);
+
+    // Calculate external damage if surface size or position changes
+    if (surface->current.width > next->width ||
+            surface->current.height > next->height ||
+            next->dx != 0 || next->dy != 0) {
+        wlr_log(WLR_ERROR, "Calculating external damage");
+        pixman_region32_union_rect(&surface->external_damage,
+            &surface->external_damage, -next->dx, -next->dy,
+            surface->current.width, surface->current.height);
+    }
+
+    // Store previous state for tracking
+    wlr_log(WLR_ERROR, "Storing previous surface state");
+    surface->previous.scale = surface->current.scale;
+    surface->previous.transform = surface->current.transform;
+    surface->previous.width = surface->current.width;
+    surface->previous.height = surface->current.height;
+    surface->previous.buffer_width = surface->current.buffer_width;
+    surface->previous.buffer_height = surface->current.buffer_height;
+
+    // Move state from next to current
+    wlr_log(WLR_ERROR, "Moving surface state");
+    surface_state_move(&surface->current, next);
+
+    // Apply damage if buffer is invalid
+    if (invalid_buffer) {
+        wlr_log(WLR_ERROR, "Applying surface damage due to invalid buffer");
+        surface_apply_damage(surface);
+    }
+
+    // Update opaque and input regions
+    wlr_log(WLR_ERROR, "Updating surface regions");
+    surface_update_opaque_region(surface);
+    surface_update_input_region(surface);
+
+    // Commit subsurface order for surfaces above
+    wlr_log(WLR_ERROR, "Committing subsurface order");
+    struct wlr_subsurface *subsurface;
+    wl_list_for_each_reverse(subsurface, &surface->pending.subsurfaces_above,
+            pending.link) {
+        wl_list_remove(&subsurface->current.link);
+        wl_list_insert(&surface->current.subsurfaces_above,
+            &subsurface->current.link);
+
+        subsurface_handle_parent_commit(subsurface);
+    }
+ wlr_log(WLR_ERROR, "Surface commit: Global RDP Peer = %p", (void*)global_rdp_peer);
+    
+    // Commit subsurface order for surfaces below
+    wl_list_for_each_reverse(subsurface, &surface->pending.subsurfaces_below,
+            pending.link) {
+        wl_list_remove(&subsurface->current.link);
+        wl_list_insert(&surface->current.subsurfaces_below,
+            &subsurface->current.link);
+
+        subsurface_handle_parent_commit(subsurface);
+    }
+
+    // Bump pending sequence number if committing pending state
+    if (next == &surface->pending) {
+        wlr_log(WLR_ERROR, "Bumping pending sequence number");
+        surface->pending.seq++;
+    }
+
+    // Call role-specific commit callback
+    if (surface->role_data != NULL && surface->role->commit != NULL) {
+        wlr_log(WLR_ERROR, "Calling role-specific commit callback");
+        surface->role->commit(surface);
+    }
+
+    // Emit commit signal
+    wlr_log(WLR_ERROR, "Emitting commit signal");
+    wl_signal_emit_mutable(&surface->events.commit, surface);
+
+    wlr_log(WLR_ERROR, "Surface commit state completed for surface %p", (void*)surface);
+}
+
 
 static void surface_handle_commit(struct wl_client *client,
 		struct wl_resource *resource) {

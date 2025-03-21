@@ -4,7 +4,7 @@ Pluggable, composable, unopinionated modules for building a [Wayland]
 compositor; or about 60,000 lines of code you were going to write anyway.
 
 - wlroots provides backends that abstract the underlying display and input
-  hardware, including KMS/DRM, libinput, Wayland, X11, and headless backends,
+  hardware, including KMS/DRM, libinput, Wayland, RDP, and headless backends,
   plus any custom backends you choose to write, which can all be created or
   destroyed at runtime and used in concert with each other.
 - wlroots provides unopinionated, mostly standalone implementations of many
@@ -15,7 +15,7 @@ compositor; or about 60,000 lines of code you were going to write anyway.
   implement components common to many compositors, such as the arrangement of
   outputs in physical space.
 - wlroots provides an Xwayland abstraction that allows you to have excellent
-  Xwayland support without worrying about writing your own X11 window manager
+  Xwayland support without worrying about writing your own RDP window manager
   on top of writing your compositor.
 - wlroots provides a renderer abstraction that simple compositors can use to
   avoid writing GL code directly, but which steps out of the way when your
@@ -53,7 +53,7 @@ Install dependencies:
 * [libseat]
 * [hwdata] (optional, for the DRM backend)
 
-If you choose to enable X11 support:
+If you choose to enable RDP support:
 
 * xwayland (build-time only, optional at runtime)
 * libxcb

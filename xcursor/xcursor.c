@@ -31,7 +31,7 @@
 #include "xcursor/xcursor.h"
 
 /*
- * From libXcursor/include/X11/extensions/Xcursor.h
+ * From libXcursor/include/RDP/extensions/Xcursor.h
  */
 
 #define XcursorTrue	1
@@ -615,11 +615,11 @@ XcursorFileLoadImages (FILE *file, int size)
  */
 
 #ifndef ICONDIR
-#define ICONDIR "/usr/X11R6/lib/X11/icons"
+#define ICONDIR "/usr/RDPR6/lib/RDP/icons"
 #endif
 
 #ifndef XCURSORPATH
-#define XCURSORPATH "~/.local/share/icons:~/.icons:/usr/share/icons:/usr/share/pixmaps:~/.cursors:/usr/share/cursors/xorg-x11:"ICONDIR
+#define XCURSORPATH "~/.local/share/icons:~/.icons:/usr/share/icons:/usr/share/pixmaps:~/.cursors:/usr/share/cursors/xorg-RDP:"ICONDIR
 #endif
 
 #define XDG_DATA_HOME_FALLBACK "~/.local/share"

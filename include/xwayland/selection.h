@@ -22,10 +22,10 @@ struct wlr_xwm_selection_transfer {
 	struct wl_event_source *event_source;
 	struct wl_list link;
 
-	// when sending to x11
+	// when sending to RDP
 	xcb_selection_request_event_t request;
 
-	// when receiving from x11
+	// when receiving from RDP
 	int property_start;
 	xcb_get_property_reply_t *property_reply;
 	xcb_window_t incoming_window;

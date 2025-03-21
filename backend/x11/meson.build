@@ -1,5 +1,5 @@
-x11_libs = []
-x11_required = [
+RDP_libs = []
+RDP_required = [
 	'xcb',
 	'xcb-dri3',
 	'xcb-present',
@@ -10,21 +10,21 @@ x11_required = [
 	'xcb-xinput',
 ]
 
-msg = ['Required for X11 backend support.']
-if 'x11' in backends
-	msg += 'Install "@0@" or disable the X11 backend.'
+msg = ['Required for RDP backend support.']
+if 'RDP' in backends
+	msg += 'Install "@0@" or disable the RDP backend.'
 endif
 
-foreach lib : x11_required
+foreach lib : RDP_required
 	dep = dependency(lib,
-		required: 'x11' in backends,
+		required: 'RDP' in backends,
 		not_found_message: '\n'.join(msg).format(lib),
 	)
 	if not dep.found()
 		subdir_done()
 	endif
 
-	x11_libs += dep
+	RDP_libs += dep
 endforeach
 
 wlr_files += files(
@@ -32,5 +32,5 @@ wlr_files += files(
 	'input_device.c',
 	'output.c',
 )
-wlr_deps += x11_libs
-features += { 'x11-backend': true }
+wlr_deps += RDP_libs
+features += { 'RDP-backend': true }

@@ -152,9 +152,9 @@
         be reused later. The names will also remain consistent across sessions
         with the same hardware and software configuration.
 
-        Examples of names include 'HDMI-A-1', 'WL-1', 'X11-1', etc. However, do
+        Examples of names include 'HDMI-A-1', 'WL-1', 'RDP-1', etc. However, do
         not assume that the name is a reflection of an underlying DRM
-        connector, X11 connection, etc.
+        connector, RDP connection, etc.
 
         If the compositor implements the xdg-output protocol and this head is
         enabled, the xdg_output.name event must report the same name.
@@ -171,10 +171,10 @@
         This event describes a human-readable description of the head.
 
         The description is a UTF-8 string with no convention defined for its
-        contents. Examples might include 'Foocorp 11" Display' or 'Virtual X11
+        contents. Examples might include 'Foocorp 11" Display' or 'Virtual RDP
         output via :1'. However, do not assume that the name is a reflection of
         the make, model, serial of the underlying DRM connector or the display
-        name of the underlying X11 connection, etc.
+        name of the underlying RDP connection, etc.
 
         If the compositor implements xdg-output and this head is enabled,
         the xdg_output.description must report the same description.

@@ -629,7 +629,7 @@ static void compiled_feedback_destroy(
 	close(feedback->table_fd);
 	free(feedback);
 }
-
+/*
 static bool feedback_tranche_init_with_renderer(
 		struct wlr_linux_dmabuf_feedback_v1_tranche *tranche,
 		struct wlr_renderer *renderer) {
@@ -655,8 +655,25 @@ static bool feedback_tranche_init_with_renderer(
 	}
 
 	return true;
-}
+}*/
+/*
+static bool feedback_tranche_init_with_renderer(
+        struct wlr_linux_dmabuf_feedback_v1_tranche *tranche,
+        struct wlr_renderer *renderer) {
+    memset(tranche, 0, sizeof(*tranche));
 
+    // For RDP backend, use a dummy device ID
+    tranche->target_device = 0;
+
+    tranche->formats = wlr_renderer_get_dmabuf_texture_formats(renderer);
+    if (tranche->formats == NULL) {
+        wlr_log(WLR_ERROR, "Failed to get renderer DMA-BUF texture formats");
+        return false;
+    }
+
+    return true;
+}*/
+/*
 static struct wlr_linux_dmabuf_feedback_v1_compiled *compile_default_feedback(
 		struct wlr_renderer *renderer) {
 	struct wlr_linux_dmabuf_feedback_v1_tranche tranche = {0};
@@ -671,6 +688,31 @@ static struct wlr_linux_dmabuf_feedback_v1_compiled *compile_default_feedback(
 	};
 
 	return feedback_compile(&feedback);
+}*/
+static struct wlr_linux_dmabuf_feedback_v1_compiled *compile_default_feedback(
+        struct wlr_renderer *renderer) {
+    struct wlr_linux_dmabuf_feedback_v1_tranche tranche = {0};
+    
+    // Create a minimal format set with a single dummy format
+    static struct wlr_drm_format dummy_format = {
+        .format = DRM_FORMAT_XRGB8888,  // A common default format
+        .len = 1,
+        .modifiers = { DRM_FORMAT_MOD_LINEAR }
+    };
+    static struct wlr_drm_format *dummy_format_ptr = &dummy_format;
+    static struct wlr_drm_format_set dummy_format_set = {
+        .len = 1,
+        .formats = &dummy_format_ptr
+    };
+    tranche.formats = &dummy_format_set;
+
+    const struct wlr_linux_dmabuf_feedback_v1 feedback = {
+        .main_device = 0,
+        .tranches = &tranche,
+        .tranches_len = 1,
+    };
+
+    return feedback_compile(&feedback);
 }
 
 static void feedback_tranche_send(

@@ -165,7 +165,7 @@ int xwm_handle_selection_event(struct wlr_xwm *xwm,
 
 	switch (event->response_type - xwm->xfixes->first_event) {
 	case XCB_XFIXES_SELECTION_NOTIFY:
-		// an X11 window has copied something to the clipboard
+		// an RDP window has copied something to the clipboard
 		return xwm_handle_xfixes_selection_notify(xwm,
 			(xcb_xfixes_selection_notify_event_t *)event);
 	}

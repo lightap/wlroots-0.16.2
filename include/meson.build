@@ -8,8 +8,8 @@ endif
 if not features.get('libinput-backend')
 	exclude_files += 'backend/libinput.h'
 endif
-if not features.get('x11-backend')
-	exclude_files += 'backend/x11.h'
+if not features.get('RDP-backend')
+	exclude_files += 'backend/RDP.h'
 endif
 if not features.get('xwayland')
 	exclude_files += 'xwayland.h'

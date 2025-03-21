@@ -180,7 +180,7 @@ static const struct wlr_texture_impl texture_impl = {
 	.update_from_buffer = gles2_texture_update_from_buffer,
 	.destroy = gles2_texture_unref,
 };
-
+/*
 static struct wlr_gles2_texture *gles2_texture_create(
 		struct wlr_gles2_renderer *renderer, uint32_t width, uint32_t height) {
 	struct wlr_gles2_texture *texture =
@@ -193,6 +193,36 @@ static struct wlr_gles2_texture *gles2_texture_create(
 	texture->renderer = renderer;
 	wl_list_insert(&renderer->textures, &texture->link);
 	return texture;
+}*/
+
+static struct wlr_gles2_texture *gles2_texture_create(struct wlr_gles2_renderer *renderer,
+        uint32_t width, uint32_t height) {
+    if (!renderer) {
+        return NULL;
+    }
+
+    // Ensure renderer's texture list is initialized
+    if (renderer->textures.prev == NULL || renderer->textures.next == NULL) {
+        wl_list_init(&renderer->textures);
+    }
+
+    struct wlr_gles2_texture *texture = calloc(1, sizeof(*texture));
+    if (texture == NULL) {
+        return NULL;
+    }
+
+    wlr_texture_init(&texture->wlr_texture, &texture_impl, width, height);
+    texture->renderer = renderer;
+
+    // Initialize texture's link before insertion
+    wl_list_init(&texture->link);
+
+    // Insert into renderer's texture list
+    if (renderer->textures.prev && renderer->textures.next) {
+        wl_list_insert(&renderer->textures, &texture->link);
+    }
+
+    return texture;
 }
 
 static struct wlr_texture *gles2_texture_from_pixels(
@@ -225,10 +255,8 @@ static struct wlr_texture *gles2_texture_from_pixels(
 	texture->has_alpha = fmt->has_alpha;
 	texture->drm_format = fmt->drm_format;
 
-	GLint internal_format = fmt->gl_internalformat;
-	if (!internal_format) {
-		internal_format = fmt->gl_format;
-	}
+	// Remove gl_internalformat and use gl_format directly
+	GLint internal_format = fmt->gl_format;
 
 	struct wlr_egl_context prev_ctx;
 	wlr_egl_save_context(&prev_ctx);
@@ -254,7 +282,6 @@ static struct wlr_texture *gles2_texture_from_pixels(
 
 	return &texture->wlr_texture;
 }
-
 static struct wlr_texture *gles2_texture_from_dmabuf(
 		struct wlr_renderer *wlr_renderer,
 		struct wlr_dmabuf_attributes *attribs) {

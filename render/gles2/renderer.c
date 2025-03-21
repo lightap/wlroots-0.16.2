@@ -1,5 +1,8 @@
+#define _POSIX_C_SOURCE 200809L
+#include <stdlib.h>  // For setenv
 #include <assert.h>
 #include <drm_fourcc.h>
+#include <gbm.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 #include <stdint.h>
@@ -17,13 +20,38 @@
 #include "render/egl.h"
 #include "render/gles2.h"
 #include "render/pixel_format.h"
-#include "types/wlr_matrix.h"
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wayland-server-core.h>
+#include <wlr/render/egl.h>
+#include <wlr/render/interface.h>
+#include <wlr/render/wlr_renderer.h>
+#include <wlr/util/log.h>
+#include <wlr/render/gles2.h>
+#include <string.h>  // For strstr
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+#include <wlr/types/wlr_matrix.h>
+#include <EGL/eglext.h>
 
-#include "common_vert_src.h"
-#include "quad_frag_src.h"
-#include "tex_rgba_frag_src.h"
-#include "tex_rgbx_frag_src.h"
-#include "tex_external_frag_src.h"
+
+
+static bool gles2_read_pixels(struct wlr_renderer *wlr_renderer,
+    uint32_t drm_format, uint32_t stride, uint32_t width, uint32_t height,
+    uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y, void *data);
+
+// For version checking and vertex array support
+#ifndef GL_MAJOR_VERSION
+#define GL_MAJOR_VERSION 0x821B
+#define GL_MINOR_VERSION 0x821C
+#endif
+
+
+
+struct wlr_renderer *wlr_gles2_renderer_create_surfaceless(void);
 
 static const GLfloat verts[] = {
 	1, 0, // top right
@@ -32,7 +60,112 @@ static const GLfloat verts[] = {
 	0, 1, // bottom left
 };
 
+
+
+
+#include <GLES2/gl2.h>
+#include "render/gles2.h"
+
+// Colored quads
+const GLchar quad_vertex_src[] =
+"uniform mat3 proj;\n"
+"uniform vec4 color;\n"
+"attribute vec2 pos;\n"
+"attribute vec2 texcoord;\n"
+"varying vec4 v_color;\n"
+"varying vec2 v_texcoord;\n"
+"\n"
+"void main() {\n"
+"	gl_Position = vec4(proj * vec3(pos, 1.0), 1.0);\n"
+"	v_color = color;\n"
+"	v_texcoord = texcoord;\n"
+"}\n";
+
+const GLchar quad_fragment_src[] =
+"precision mediump float;\n"
+"varying vec4 v_color;\n"
+"varying vec2 v_texcoord;\n"
+"\n"
+"void main() {\n"
+"	gl_FragColor = v_color;\n"
+"}\n";
+
+// Textured quads
+const GLchar tex_vertex_src[] =
+"uniform mat3 proj;\n"
+"uniform bool invert_y;\n"
+"attribute vec2 pos;\n"
+"attribute vec2 texcoord;\n"
+"varying vec2 v_texcoord;\n"
+"\n"
+"void main() {\n"
+"	gl_Position = vec4(proj * vec3(pos, 1.0), 1.0);\n"
+"	if (invert_y) {\n"
+"		v_texcoord = vec2(texcoord.x, 1.0 - texcoord.y);\n"
+"	} else {\n"
+"		v_texcoord = texcoord;\n"
+"	}\n"
+"}\n";
+
+const GLchar tex_fragment_src_rgba[] =
+"precision mediump float;\n"
+"varying vec2 v_texcoord;\n"
+"uniform sampler2D tex;\n"
+"uniform float alpha;\n"
+"\n"
+"void main() {\n"
+"	gl_FragColor = texture2D(tex, v_texcoord) * alpha;\n"
+"}\n";
+
+const GLchar tex_fragment_src_rgbx[] =
+"precision mediump float;\n"
+"varying vec2 v_texcoord;\n"
+"uniform sampler2D tex;\n"
+"uniform float alpha;\n"
+"\n"
+"void main() {\n"
+"	gl_FragColor = vec4(texture2D(tex, v_texcoord).rgb, 1.0) * alpha;\n"
+"}\n";
+
+const GLchar tex_fragment_src_external[] =
+"#extension GL_OES_EGL_image_external : require\n\n"
+"precision mediump float;\n"
+"varying vec2 v_texcoord;\n"
+"uniform samplerExternalOES texture0;\n"
+"uniform float alpha;\n"
+"\n"
+"void main() {\n"
+"	gl_FragColor = texture2D(texture0, v_texcoord) * alpha;\n"
+"}\n";
+
+
+
+
+
 static const struct wlr_renderer_impl renderer_impl;
+
+
+// Add these function declarations or implementations
+static GLuint gl_shader_program_create(const char *vert_src, const char *frag_src) {
+    GLuint vert = glCreateShader(GL_VERTEX_SHADER);
+    GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
+    
+    glShaderSource(vert, 1, &vert_src, NULL);
+    glShaderSource(frag, 1, &frag_src, NULL);
+    
+    glCompileShader(vert);
+    glCompileShader(frag);
+    
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vert);
+    glAttachShader(prog, frag);
+    glLinkProgram(prog);
+    
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    
+    return prog;
+}
 
 bool wlr_renderer_is_gles2(struct wlr_renderer *wlr_renderer) {
 	return wlr_renderer->impl == &renderer_impl;
@@ -95,68 +228,184 @@ static struct wlr_gles2_buffer *get_buffer(struct wlr_gles2_renderer *renderer,
 	struct wlr_gles2_buffer *buffer = wl_container_of(addon, buffer, addon);
 	return buffer;
 }
+/*
+static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *renderer,
+        struct wlr_buffer *wlr_buffer) {
+    wlr_log(WLR_DEBUG, "Creating GLES2 buffer for %dx%d", 
+        wlr_buffer->width, wlr_buffer->height);
+
+    struct wlr_gles2_buffer *buffer = calloc(1, sizeof(*buffer));
+    if (!buffer) {
+        return NULL;
+    }
+
+    buffer->buffer = wlr_buffer;
+    buffer->renderer = renderer;
+
+    // Access buffer data
+    void *data_ptr;
+    uint32_t format;
+    size_t stride;  // Changed from uint32_t to size_t
+    
+    if (!wlr_buffer_begin_data_ptr_access(wlr_buffer, 
+            WLR_BUFFER_DATA_PTR_ACCESS_READ, 
+            &data_ptr, &format, &stride)) {
+        wlr_log(WLR_ERROR, "Failed to access buffer data");
+        free(buffer);
+        return NULL;
+    }
+
+    push_gles2_debug(renderer);
+
+    // Create and upload texture
+    glGenTextures(1, &buffer->texture);
+    glBindTexture(GL_TEXTURE_2D, buffer->texture);
+    
+    // Configure texture parameters
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // Upload texture data - XRGB8888 format
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 
+        wlr_buffer->width, wlr_buffer->height, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, data_ptr);
+
+    // Release buffer access
+    wlr_buffer_end_data_ptr_access(wlr_buffer);
+
+    // Create and setup FBO
+    glGenFramebuffers(1, &buffer->fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, buffer->texture, 0);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    pop_gles2_debug(renderer);
+
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Failed to create FBO: %x", status);
+        glDeleteFramebuffers(1, &buffer->fbo);
+        glDeleteTextures(1, &buffer->texture);
+        free(buffer);
+        return NULL;
+    }
+
+    wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer,
+        &buffer_addon_impl);
+    wl_list_insert(&renderer->buffers, &buffer->link);
+
+    return buffer;
+}*/
 
 static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *renderer,
-		struct wlr_buffer *wlr_buffer) {
-	struct wlr_gles2_buffer *buffer = calloc(1, sizeof(*buffer));
-	if (buffer == NULL) {
-		wlr_log_errno(WLR_ERROR, "Allocation failed");
-		return NULL;
-	}
-	buffer->buffer = wlr_buffer;
-	buffer->renderer = renderer;
+        struct wlr_buffer *wlr_buffer) {
+    wlr_log(WLR_DEBUG, "Creating GLES2 buffer for %dx%d", 
+        wlr_buffer->width, wlr_buffer->height);
 
-	struct wlr_dmabuf_attributes dmabuf = {0};
-	if (!wlr_buffer_get_dmabuf(wlr_buffer, &dmabuf)) {
-		goto error_buffer;
-	}
+    // Check for null renderer and log initial list state
+    if (!renderer) {
+        wlr_log(WLR_ERROR, "Null renderer in create_buffer");
+        return NULL;
+    }
 
-	bool external_only;
-	buffer->image = wlr_egl_create_image_from_dmabuf(renderer->egl,
-		&dmabuf, &external_only);
-	if (buffer->image == EGL_NO_IMAGE_KHR) {
-		goto error_buffer;
-	}
+    wlr_log(WLR_DEBUG, "Initial list state - head: %p, prev: %p, next: %p",
+        &renderer->buffers, renderer->buffers.prev, renderer->buffers.next);
 
-	push_gles2_debug(renderer);
+    // Create buffer
+    struct wlr_gles2_buffer *buffer = calloc(1, sizeof(*buffer));
+    if (!buffer) {
+        return NULL;
+    }
 
-	glGenRenderbuffers(1, &buffer->rbo);
-	glBindRenderbuffer(GL_RENDERBUFFER, buffer->rbo);
-	renderer->procs.glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER,
-		buffer->image);
-	glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    buffer->buffer = wlr_buffer;
+    buffer->renderer = renderer;
 
-	glGenFramebuffers(1, &buffer->fbo);
-	glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
-	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-		GL_RENDERBUFFER, buffer->rbo);
-	GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // Access buffer data
+    void *data_ptr;
+    uint32_t format;
+    size_t stride;
+    
+    if (!wlr_buffer_begin_data_ptr_access(wlr_buffer, 
+            WLR_BUFFER_DATA_PTR_ACCESS_READ, 
+            &data_ptr, &format, &stride)) {
+        wlr_log(WLR_ERROR, "Failed to access buffer data");
+        free(buffer);
+        return NULL;
+    }
 
-	pop_gles2_debug(renderer);
+    push_gles2_debug(renderer);
 
-	if (fb_status != GL_FRAMEBUFFER_COMPLETE) {
-		wlr_log(WLR_ERROR, "Failed to create FBO");
-		goto error_image;
-	}
+    // Create and upload texture
+    glGenTextures(1, &buffer->texture);
+    glBindTexture(GL_TEXTURE_2D, buffer->texture);
+    
+    // Configure texture parameters
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-	wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer,
-		&buffer_addon_impl);
+    // Upload texture data - XRGB8888 format
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 
+        wlr_buffer->width, wlr_buffer->height, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, data_ptr);
 
-	wl_list_insert(&renderer->buffers, &buffer->link);
+    // Release buffer access
+    wlr_buffer_end_data_ptr_access(wlr_buffer);
 
-	wlr_log(WLR_DEBUG, "Created GL FBO for buffer %dx%d",
-		wlr_buffer->width, wlr_buffer->height);
+    // Create and setup FBO
+    glGenFramebuffers(1, &buffer->fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, buffer->texture, 0);
 
-	return buffer;
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 
-error_image:
-	wlr_egl_destroy_image(renderer->egl, buffer->image);
-error_buffer:
-	free(buffer);
-	return NULL;
+    pop_gles2_debug(renderer);
+
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Failed to create FBO: %x", status);
+        glDeleteFramebuffers(1, &buffer->fbo);
+        glDeleteTextures(1, &buffer->texture);
+        free(buffer);
+        return NULL;
+    }
+
+    // Initialize Wayland resources
+    wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer,
+        &buffer_addon_impl);
+
+    // Check list state and reinitialize if necessary
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_DEBUG, "List appears corrupted, reinitializing");
+        wl_list_init(&renderer->buffers);
+    }
+
+    // Verify list state after potential reinitialization
+    wlr_log(WLR_DEBUG, "List state after init - head: %p, prev: %p, next: %p",
+        &renderer->buffers, renderer->buffers.prev, renderer->buffers.next);
+
+    // Initialize buffer's own list link
+    wl_list_init(&buffer->link);
+
+    // Insert into renderer's buffer list
+    wl_list_insert(&renderer->buffers, &buffer->link);
+
+    // Verify final state
+    wlr_log(WLR_DEBUG, "Final list state - head next: %p, head prev: %p, buffer next: %p, buffer prev: %p",
+        renderer->buffers.next, renderer->buffers.prev,
+        buffer->link.next, buffer->link.prev);
+
+    return buffer;
 }
-
+/*
 static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
 		struct wlr_buffer *wlr_buffer) {
 	struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
@@ -196,31 +445,114 @@ static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
 	pop_gles2_debug(renderer);
 
 	return true;
+}*/
+
+static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
+        struct wlr_buffer *wlr_buffer) {
+    struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
+
+    // Add extensive logging
+    wlr_log(WLR_DEBUG, "GLES2 Bind Buffer: Entering function");
+    wlr_log(WLR_DEBUG, "  Renderer: %p", (void*)renderer);
+    wlr_log(WLR_DEBUG, "  Buffer: %p", (void*)wlr_buffer);
+
+    // If there's a current buffer, handle it first
+    if (renderer->current_buffer != NULL) {
+        wlr_log(WLR_DEBUG, "  Existing buffer found, unbinding");
+        assert(wlr_egl_is_current(renderer->egl));
+
+        push_gles2_debug(renderer);
+        glFlush();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        pop_gles2_debug(renderer);
+
+        wlr_buffer_unlock(renderer->current_buffer->buffer);
+        renderer->current_buffer = NULL;
+    }
+
+    // NULL buffer means just unbind
+    if (wlr_buffer == NULL) {
+        wlr_log(WLR_DEBUG, "  NULL buffer, unsetting EGL context");
+        wlr_egl_unset_current(renderer->egl);
+        return true;
+    }
+
+    // Ensure EGL context is current
+    if (!wlr_egl_make_current(renderer->egl)) {
+        wlr_log(WLR_ERROR, "  Failed to make EGL context current");
+        return false;
+    }
+
+    // Try to get or create a buffer
+    struct wlr_gles2_buffer *buffer = get_buffer(renderer, wlr_buffer);
+    if (buffer == NULL) {
+        wlr_log(WLR_DEBUG, "  No existing buffer, attempting to create");
+        buffer = create_buffer(renderer, wlr_buffer);
+    }
+
+    // Check buffer creation
+    if (buffer == NULL) {
+        wlr_log(WLR_ERROR, "  Failed to get or create buffer");
+        return false;
+    }
+
+    // Lock the buffer and set as current
+    wlr_buffer_lock(wlr_buffer);
+    renderer->current_buffer = buffer;
+
+    // Bind framebuffer
+    push_gles2_debug(renderer);
+    glBindFramebuffer(GL_FRAMEBUFFER, renderer->current_buffer->fbo);
+    
+    // Validate framebuffer
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "  Framebuffer is not complete. Status: 0x%x", status);
+    }
+    
+    pop_gles2_debug(renderer);
+
+    wlr_log(WLR_DEBUG, "  Successfully bound buffer");
+    return true;
 }
+
 
 static void gles2_begin(struct wlr_renderer *wlr_renderer, uint32_t width,
-		uint32_t height) {
-	struct wlr_gles2_renderer *renderer =
-		gles2_get_renderer_in_context(wlr_renderer);
+        uint32_t height) {
+    struct wlr_gles2_renderer *renderer =
+        gles2_get_renderer_in_context(wlr_renderer);
 
-	push_gles2_debug(renderer);
+    push_gles2_debug(renderer);
 
-	glViewport(0, 0, width, height);
-	renderer->viewport_width = width;
-	renderer->viewport_height = height;
+    glViewport(0, 0, width, height);
+    renderer->viewport_width = width;
+    renderer->viewport_height = height;
 
-	// refresh projection matrix
-	matrix_projection(renderer->projection, width, height,
-		WL_OUTPUT_TRANSFORM_FLIPPED_180);
+    // Create an orthographic projection matrix
+    float projection[9];
+    wlr_matrix_identity(projection);
+    
+    // Scale to fit the viewport
+    float sx = 2.0f / width;
+    float sy = -2.0f / height;
+    wlr_matrix_scale(projection, sx, sy);
+    
+    // Translate to center
+    wlr_matrix_translate(projection, -1.0f, 1.0f);
 
-	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    struct wlr_box box = {
+        .x = 0,
+        .y = 0,
+        .width = width,
+        .height = height
+    };
+    wlr_matrix_project_box(renderer->projection, &box, 
+        WL_OUTPUT_TRANSFORM_NORMAL, 0, projection);
 
-	// XXX: maybe we should save output projection and remove some of the need
-	// for users to sling matricies themselves
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-	pop_gles2_debug(renderer);
+    pop_gles2_debug(renderer);
 }
-
 static void gles2_end(struct wlr_renderer *wlr_renderer) {
 	gles2_get_renderer_in_context(wlr_renderer);
 	// no-op
@@ -252,6 +584,12 @@ static void gles2_scissor(struct wlr_renderer *wlr_renderer,
 	pop_gles2_debug(renderer);
 }
 
+static const float flip_180[9] = {
+	1.0f, 0.0f, 0.0f,
+	0.0f, -1.0f, 0.0f,
+	0.0f, 0.0f, 1.0f,
+};
+
 static bool gles2_render_subtexture_with_matrix(
 		struct wlr_renderer *wlr_renderer, struct wlr_texture *wlr_texture,
 		const struct wlr_fbox *box, const float matrix[static 9],
@@ -273,10 +611,13 @@ static bool gles2_render_subtexture_with_matrix(
 		}
 		break;
 	case GL_TEXTURE_EXTERNAL_OES:
-		// EGL_EXT_image_dma_buf_import_modifiers requires
-		// GL_OES_EGL_image_external
-		assert(renderer->exts.OES_egl_image_external);
 		shader = &renderer->shaders.tex_ext;
+
+		if (!renderer->exts.OES_egl_image_external) {
+			wlr_log(WLR_ERROR, "Failed to render texture: "
+				"GL_TEXTURE_EXTERNAL_OES not supported");
+			return false;
+		}
 		break;
 	default:
 		abort();
@@ -284,6 +625,7 @@ static bool gles2_render_subtexture_with_matrix(
 
 	float gl_matrix[9];
 	wlr_matrix_multiply(gl_matrix, renderer->projection, matrix);
+	wlr_matrix_multiply(gl_matrix, flip_180, gl_matrix);
 
 	// OpenGL ES 2 requires the glUniformMatrix3fv transpose parameter to be set
 	// to GL_FALSE
@@ -305,6 +647,7 @@ static bool gles2_render_subtexture_with_matrix(
 	glUseProgram(shader->program);
 
 	glUniformMatrix3fv(shader->proj, 1, GL_FALSE, gl_matrix);
+	glUniform1i(shader->invert_y, texture->inverted_y);
 	glUniform1i(shader->tex, 0);
 	glUniform1f(shader->alpha, alpha);
 
@@ -343,6 +686,7 @@ static void gles2_render_quad_with_matrix(struct wlr_renderer *wlr_renderer,
 
 	float gl_matrix[9];
 	wlr_matrix_multiply(gl_matrix, renderer->projection, matrix);
+	wlr_matrix_multiply(gl_matrix, flip_180, gl_matrix);
 
 	// OpenGL ES 2 requires the glUniformMatrix3fv transpose parameter to be set
 	// to GL_FALSE
@@ -374,9 +718,18 @@ static void gles2_render_quad_with_matrix(struct wlr_renderer *wlr_renderer,
 }
 
 static const uint32_t *gles2_get_shm_texture_formats(
-		struct wlr_renderer *wlr_renderer, size_t *len) {
-	struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
-	return get_gles2_shm_formats(renderer, len);
+        struct wlr_renderer *wlr_renderer, size_t *len) {
+   // struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
+    
+    // Explicitly include both ARGB8888 and XRGB8888
+    static const uint32_t formats[] = {
+        WL_SHM_FORMAT_ARGB8888,
+        WL_SHM_FORMAT_XRGB8888,
+        // Add other formats as needed
+    };
+    
+    *len = sizeof(formats) / sizeof(formats[0]);
+    return formats;
 }
 
 static const struct wlr_drm_format_set *gles2_get_dmabuf_texture_formats(
@@ -398,10 +751,15 @@ static uint32_t gles2_preferred_read_format(
 
 	push_gles2_debug(renderer);
 
-	GLint gl_format = -1, gl_type = -1, alpha_size = -1;
+	GLint gl_format = -1, gl_type = -1;
 	glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, &gl_format);
 	glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE, &gl_type);
-	glGetIntegerv(GL_ALPHA_BITS, &alpha_size);
+
+	EGLint alpha_size = -1;
+	glBindRenderbuffer(GL_RENDERBUFFER, renderer->current_buffer->rbo);
+	glGetRenderbufferParameteriv(GL_RENDERBUFFER,
+		GL_RENDERBUFFER_ALPHA_SIZE, &alpha_size);
+	glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
 	pop_gles2_debug(renderer);
 
@@ -418,57 +776,52 @@ static uint32_t gles2_preferred_read_format(
 }
 
 static bool gles2_read_pixels(struct wlr_renderer *wlr_renderer,
-		uint32_t drm_format, uint32_t stride,
-		uint32_t width, uint32_t height, uint32_t src_x, uint32_t src_y,
-		uint32_t dst_x, uint32_t dst_y, void *data) {
-	struct wlr_gles2_renderer *renderer =
-		gles2_get_renderer_in_context(wlr_renderer);
+    uint32_t drm_format, uint32_t stride, uint32_t width, uint32_t height,
+    uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y, void *data) {
+    struct wlr_gles2_renderer *renderer =
+        gles2_get_renderer_in_context(wlr_renderer);
 
-	const struct wlr_gles2_pixel_format *fmt =
-		get_gles2_format_from_drm(drm_format);
-	if (fmt == NULL || !is_gles2_pixel_format_supported(renderer, fmt)) {
-		wlr_log(WLR_ERROR, "Cannot read pixels: unsupported pixel format 0x%"PRIX32, drm_format);
-		return false;
-	}
+    const struct wlr_gles2_pixel_format *fmt =
+        get_gles2_format_from_drm(drm_format);
+    if (fmt == NULL || !is_gles2_pixel_format_supported(renderer, fmt)) {
+        wlr_log(WLR_ERROR, "Cannot read pixels: unsupported pixel format 0x%"PRIX32, drm_format);
+        return false;
+    }
 
-	if (fmt->gl_format == GL_BGRA_EXT && !renderer->exts.EXT_read_format_bgra) {
-		wlr_log(WLR_ERROR,
-			"Cannot read pixels: missing GL_EXT_read_format_bgra extension");
-		return false;
-	}
+    const struct wlr_pixel_format_info *drm_fmt =
+        drm_get_pixel_format_info(fmt->drm_format);
+    assert(drm_fmt);
 
-	const struct wlr_pixel_format_info *drm_fmt =
-		drm_get_pixel_format_info(fmt->drm_format);
-	assert(drm_fmt);
+    push_gles2_debug(renderer);
 
-	push_gles2_debug(renderer);
+    // Make sure any pending drawing is finished before we try to read it
+    glFinish();
 
-	// Make sure any pending drawing is finished before we try to read it
-	glFinish();
+    glGetError(); // Clear the error flag
 
-	glGetError(); // Clear the error flag
+    unsigned char *p = (unsigned char *)data + dst_y * stride;
+    uint32_t pack_stride = width * drm_fmt->bpp / 8;
+    if (pack_stride == stride && dst_x == 0) {
+        // Under these particular conditions, we can read the pixels with only
+        // one glReadPixels call
 
-	unsigned char *p = (unsigned char *)data + dst_y * stride;
-	uint32_t pack_stride = width * drm_fmt->bpp / 8;
-	if (pack_stride == stride && dst_x == 0) {
-		// Under these particular conditions, we can read the pixels with only
-		// one glReadPixels call
+        glReadPixels(src_x, src_y, width, height, fmt->gl_format, fmt->gl_type, p);
+    } else {
+        // Unfortunately GLES2 doesn't support GL_PACK_*, so we have to read
+        // the lines out row by row
+        for (size_t i = 0; i < height; ++i) {
+            uint32_t y = src_y + i;
+            glReadPixels(src_x, y, width, 1, fmt->gl_format,
+                fmt->gl_type, p + i * stride + dst_x * drm_fmt->bpp / 8);
+        }
+    }
 
-		glReadPixels(src_x, src_y, width, height, fmt->gl_format, fmt->gl_type, p);
-	} else {
-		// Unfortunately GLES2 doesn't support GL_PACK_*, so we have to read
-		// the lines out row by row
-		for (size_t i = 0; i < height; ++i) {
-			uint32_t y = src_y + i;
-			glReadPixels(src_x, y, width, 1, fmt->gl_format,
-				fmt->gl_type, p + i * stride + dst_x * drm_fmt->bpp / 8);
-		}
-	}
+    pop_gles2_debug(renderer);
 
-	pop_gles2_debug(renderer);
-
-	return glGetError() == GL_NO_ERROR;
+    return glGetError() == GL_NO_ERROR;
 }
+
+
 
 static int gles2_get_drm_fd(struct wlr_renderer *wlr_renderer) {
 	struct wlr_gles2_renderer *renderer =
@@ -564,7 +917,7 @@ void pop_gles2_debug(struct wlr_gles2_renderer *renderer) {
 		renderer->procs.glPopDebugGroupKHR();
 	}
 }
-
+/*
 static enum wlr_log_importance gles2_log_importance_to_wlr(GLenum type) {
 	switch (type) {
 	case GL_DEBUG_TYPE_ERROR_KHR:               return WLR_ERROR;
@@ -578,13 +931,13 @@ static enum wlr_log_importance gles2_log_importance_to_wlr(GLenum type) {
 	case GL_DEBUG_TYPE_POP_GROUP_KHR:           return WLR_DEBUG;
 	default:                                    return WLR_DEBUG;
 	}
-}
-
+}*/
+/*
 static void gles2_log(GLenum src, GLenum type, GLuint id, GLenum severity,
 		GLsizei len, const GLchar *msg, const void *user) {
 	_wlr_log(gles2_log_importance_to_wlr(type), "[GLES2] %s", msg);
-}
-
+}*/
+/*
 static GLuint compile_shader(struct wlr_gles2_renderer *renderer,
 		GLuint type, const GLchar *src) {
 	push_gles2_debug(renderer);
@@ -596,15 +949,14 @@ static GLuint compile_shader(struct wlr_gles2_renderer *renderer,
 	GLint ok;
 	glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
 	if (ok == GL_FALSE) {
-		wlr_log(WLR_ERROR, "Failed to compile shader");
 		glDeleteShader(shader);
 		shader = 0;
 	}
 
 	pop_gles2_debug(renderer);
 	return shader;
-}
-
+}*/
+/*
 static GLuint link_program(struct wlr_gles2_renderer *renderer,
 		const GLchar *vert_src, const GLchar *frag_src) {
 	push_gles2_debug(renderer);
@@ -633,7 +985,6 @@ static GLuint link_program(struct wlr_gles2_renderer *renderer,
 	GLint ok;
 	glGetProgramiv(prog, GL_LINK_STATUS, &ok);
 	if (ok == GL_FALSE) {
-		wlr_log(WLR_ERROR, "Failed to link shader");
 		glDeleteProgram(prog);
 		goto error;
 	}
@@ -644,7 +995,7 @@ static GLuint link_program(struct wlr_gles2_renderer *renderer,
 error:
 	pop_gles2_debug(renderer);
 	return 0;
-}
+}*/
 
 static bool check_gl_ext(const char *exts, const char *ext) {
 	size_t extlen = strlen(ext);
@@ -663,7 +1014,7 @@ static bool check_gl_ext(const char *exts, const char *ext) {
 	}
 	return false;
 }
-
+/*
 static void load_gl_proc(void *proc_ptr, const char *name) {
 	void *proc = (void *)eglGetProcAddress(name);
 	if (proc == NULL) {
@@ -671,7 +1022,14 @@ static void load_gl_proc(void *proc_ptr, const char *name) {
 		abort();
 	}
 	*(void **)proc_ptr = proc;
-}
+}*/
+
+extern const GLchar quad_vertex_src[];
+extern const GLchar quad_fragment_src[];
+extern const GLchar tex_vertex_src[];
+extern const GLchar tex_fragment_src_rgba[];
+extern const GLchar tex_fragment_src_rgbx[];
+extern const GLchar tex_fragment_src_external[];
 
 struct wlr_renderer *wlr_gles2_renderer_create_with_drm_fd(int drm_fd) {
 	struct wlr_egl *egl = wlr_egl_create_with_drm_fd(drm_fd);
@@ -690,168 +1048,6 @@ struct wlr_renderer *wlr_gles2_renderer_create_with_drm_fd(int drm_fd) {
 	return renderer;
 }
 
-struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
-	if (!wlr_egl_make_current(egl)) {
-		return NULL;
-	}
-
-	const char *exts_str = (const char *)glGetString(GL_EXTENSIONS);
-	if (exts_str == NULL) {
-		wlr_log(WLR_ERROR, "Failed to get GL_EXTENSIONS");
-		return NULL;
-	}
-
-	struct wlr_gles2_renderer *renderer =
-		calloc(1, sizeof(struct wlr_gles2_renderer));
-	if (renderer == NULL) {
-		return NULL;
-	}
-	wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl);
-
-	wl_list_init(&renderer->buffers);
-	wl_list_init(&renderer->textures);
-
-	renderer->egl = egl;
-	renderer->exts_str = exts_str;
-	renderer->drm_fd = -1;
-
-	wlr_log(WLR_INFO, "Creating GLES2 renderer");
-	wlr_log(WLR_INFO, "Using %s", glGetString(GL_VERSION));
-	wlr_log(WLR_INFO, "GL vendor: %s", glGetString(GL_VENDOR));
-	wlr_log(WLR_INFO, "GL renderer: %s", glGetString(GL_RENDERER));
-	wlr_log(WLR_INFO, "Supported GLES2 extensions: %s", exts_str);
-
-	if (!renderer->egl->exts.EXT_image_dma_buf_import) {
-		wlr_log(WLR_ERROR, "EGL_EXT_image_dma_buf_import not supported");
-		free(renderer);
-		return NULL;
-	}
-	if (!check_gl_ext(exts_str, "GL_EXT_texture_format_BGRA8888")) {
-		wlr_log(WLR_ERROR, "BGRA8888 format not supported by GLES2");
-		free(renderer);
-		return NULL;
-	}
-	if (!check_gl_ext(exts_str, "GL_EXT_unpack_subimage")) {
-		wlr_log(WLR_ERROR, "GL_EXT_unpack_subimage not supported");
-		free(renderer);
-		return NULL;
-	}
-
-	renderer->exts.EXT_read_format_bgra =
-		check_gl_ext(exts_str, "GL_EXT_read_format_bgra");
-
-	renderer->exts.EXT_texture_type_2_10_10_10_REV =
-		check_gl_ext(exts_str, "GL_EXT_texture_type_2_10_10_10_REV");
-
-	renderer->exts.OES_texture_half_float_linear =
-		check_gl_ext(exts_str, "GL_OES_texture_half_float_linear");
-
-	renderer->exts.EXT_texture_norm16 =
-		check_gl_ext(exts_str, "GL_EXT_texture_norm16");
-
-	if (check_gl_ext(exts_str, "GL_KHR_debug")) {
-		renderer->exts.KHR_debug = true;
-		load_gl_proc(&renderer->procs.glDebugMessageCallbackKHR,
-			"glDebugMessageCallbackKHR");
-		load_gl_proc(&renderer->procs.glDebugMessageControlKHR,
-			"glDebugMessageControlKHR");
-	}
-
-	if (check_gl_ext(exts_str, "GL_OES_EGL_image_external")) {
-		renderer->exts.OES_egl_image_external = true;
-		load_gl_proc(&renderer->procs.glEGLImageTargetTexture2DOES,
-			"glEGLImageTargetTexture2DOES");
-	}
-
-	if (check_gl_ext(exts_str, "GL_OES_EGL_image")) {
-		renderer->exts.OES_egl_image = true;
-		load_gl_proc(&renderer->procs.glEGLImageTargetRenderbufferStorageOES,
-			"glEGLImageTargetRenderbufferStorageOES");
-	}
-
-	if (renderer->exts.KHR_debug) {
-		glEnable(GL_DEBUG_OUTPUT_KHR);
-		glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS_KHR);
-		renderer->procs.glDebugMessageCallbackKHR(gles2_log, NULL);
-
-		// Silence unwanted message types
-		renderer->procs.glDebugMessageControlKHR(GL_DONT_CARE,
-			GL_DEBUG_TYPE_POP_GROUP_KHR, GL_DONT_CARE, 0, NULL, GL_FALSE);
-		renderer->procs.glDebugMessageControlKHR(GL_DONT_CARE,
-			GL_DEBUG_TYPE_PUSH_GROUP_KHR, GL_DONT_CARE, 0, NULL, GL_FALSE);
-	}
-
-	push_gles2_debug(renderer);
-
-	GLuint prog;
-	renderer->shaders.quad.program = prog =
-		link_program(renderer, common_vert_src, quad_frag_src);
-	if (!renderer->shaders.quad.program) {
-		goto error;
-	}
-	renderer->shaders.quad.proj = glGetUniformLocation(prog, "proj");
-	renderer->shaders.quad.color = glGetUniformLocation(prog, "color");
-	renderer->shaders.quad.pos_attrib = glGetAttribLocation(prog, "pos");
-
-	renderer->shaders.tex_rgba.program = prog =
-		link_program(renderer, common_vert_src, tex_rgba_frag_src);
-	if (!renderer->shaders.tex_rgba.program) {
-		goto error;
-	}
-	renderer->shaders.tex_rgba.proj = glGetUniformLocation(prog, "proj");
-	renderer->shaders.tex_rgba.tex = glGetUniformLocation(prog, "tex");
-	renderer->shaders.tex_rgba.alpha = glGetUniformLocation(prog, "alpha");
-	renderer->shaders.tex_rgba.pos_attrib = glGetAttribLocation(prog, "pos");
-	renderer->shaders.tex_rgba.tex_attrib = glGetAttribLocation(prog, "texcoord");
-
-	renderer->shaders.tex_rgbx.program = prog =
-		link_program(renderer, common_vert_src, tex_rgbx_frag_src);
-	if (!renderer->shaders.tex_rgbx.program) {
-		goto error;
-	}
-	renderer->shaders.tex_rgbx.proj = glGetUniformLocation(prog, "proj");
-	renderer->shaders.tex_rgbx.tex = glGetUniformLocation(prog, "tex");
-	renderer->shaders.tex_rgbx.alpha = glGetUniformLocation(prog, "alpha");
-	renderer->shaders.tex_rgbx.pos_attrib = glGetAttribLocation(prog, "pos");
-	renderer->shaders.tex_rgbx.tex_attrib = glGetAttribLocation(prog, "texcoord");
-
-	if (renderer->exts.OES_egl_image_external) {
-		renderer->shaders.tex_ext.program = prog =
-			link_program(renderer, common_vert_src, tex_external_frag_src);
-		if (!renderer->shaders.tex_ext.program) {
-			goto error;
-		}
-		renderer->shaders.tex_ext.proj = glGetUniformLocation(prog, "proj");
-		renderer->shaders.tex_ext.tex = glGetUniformLocation(prog, "tex");
-		renderer->shaders.tex_ext.alpha = glGetUniformLocation(prog, "alpha");
-		renderer->shaders.tex_ext.pos_attrib = glGetAttribLocation(prog, "pos");
-		renderer->shaders.tex_ext.tex_attrib = glGetAttribLocation(prog, "texcoord");
-	}
-
-	pop_gles2_debug(renderer);
-
-	wlr_egl_unset_current(renderer->egl);
-
-	return &renderer->wlr_renderer;
-
-error:
-	glDeleteProgram(renderer->shaders.quad.program);
-	glDeleteProgram(renderer->shaders.tex_rgba.program);
-	glDeleteProgram(renderer->shaders.tex_rgbx.program);
-	glDeleteProgram(renderer->shaders.tex_ext.program);
-
-	pop_gles2_debug(renderer);
-
-	if (renderer->exts.KHR_debug) {
-		glDisable(GL_DEBUG_OUTPUT_KHR);
-		renderer->procs.glDebugMessageCallbackKHR(NULL, NULL);
-	}
-
-	wlr_egl_unset_current(renderer->egl);
-
-	free(renderer);
-	return NULL;
-}
 
 bool wlr_gles2_renderer_check_ext(struct wlr_renderer *wlr_renderer,
 		const char *ext) {
@@ -859,8 +1055,223 @@ bool wlr_gles2_renderer_check_ext(struct wlr_renderer *wlr_renderer,
 	return check_gl_ext(renderer->exts_str, ext);
 }
 
-GLuint wlr_gles2_renderer_get_current_fbo(struct wlr_renderer *wlr_renderer) {
-	struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
-	assert(renderer->current_buffer);
-	return renderer->current_buffer->fbo;
+
+
+
+struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
+    if (!eglMakeCurrent(egl->display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl->context)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current");
+        return NULL;
+    }
+
+    struct wlr_gles2_renderer *renderer = calloc(1, sizeof(struct wlr_gles2_renderer));
+    if (renderer == NULL) {
+        return NULL;
+    }
+
+    renderer->egl = egl;
+    renderer->wlr_renderer.impl = &renderer_impl;
+    renderer->drm_fd = -1;
+
+    // Initialize lists and verify
+    wl_list_init(&renderer->buffers);
+    wl_list_init(&renderer->textures);
+    
+    // Verify list initialization
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_ERROR, "Buffer list initialization failed");
+        free(renderer);
+        return NULL;
+    }
+
+    wlr_log(WLR_DEBUG, "Buffer list initialized - head: %p, prev: %p, next: %p",
+        &renderer->buffers, renderer->buffers.prev, renderer->buffers.next);
+
+    // Let Zink handle GPU acceleration naturally
+    const char *driver = getenv("MESA_LOADER_DRIVER_OVERRIDE");
+    if (driver && strcmp(driver, "zink") == 0) {
+        wlr_log(WLR_INFO, "Using Zink (Vulkan) driver for hardware acceleration");
+    }
+
+    // Initialize basic shader programs
+    renderer->shaders.quad.program = gl_shader_program_create(
+        quad_vertex_src, quad_fragment_src);
+    if (!renderer->shaders.quad.program) {
+        free(renderer);
+        return NULL;
+    }
+
+    wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl);
+    return &renderer->wlr_renderer;
+}
+
+struct wlr_renderer *wlr_gles2_renderer_create_surfaceless(void) {
+    wlr_log(WLR_INFO, "Attempting to create surfaceless GLES2 renderer");
+    struct wlr_egl *egl = calloc(1, sizeof(struct wlr_egl));
+    if (!egl) {
+        wlr_log(WLR_ERROR, "Failed to allocate EGL structure");
+        return NULL;
+    }
+
+    // Log system EGL information
+    const char *egl_vendor = eglQueryString(EGL_NO_DISPLAY, EGL_VENDOR);
+    const char *egl_version = eglQueryString(EGL_NO_DISPLAY, EGL_VERSION);
+    wlr_log(WLR_INFO, "EGL Vendor: %s", egl_vendor ?: "Unknown");
+    wlr_log(WLR_INFO, "EGL Version: %s", egl_version ?: "Unknown");
+
+    const char *extensions = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    wlr_log(WLR_INFO, "Client EGL Extensions: %s", extensions ?: "NULL");
+
+    // Explicitly check for surfaceless support
+    bool has_surfaceless = strstr(extensions, "EGL_MESA_platform_surfaceless") != NULL;
+    bool has_platform_base = strstr(extensions, "EGL_EXT_platform_base") != NULL;
+
+    wlr_log(WLR_INFO, "Surfaceless platform support: %s", 
+            has_surfaceless ? "YES" : "NO");
+    wlr_log(WLR_INFO, "Platform base extension: %s", 
+            has_platform_base ? "YES" : "NO");
+
+    // Use platform display function if available
+    PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display = 
+        (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+
+    if (!get_platform_display) {
+        wlr_log(WLR_ERROR, "Platform display function not available");
+        free(egl);
+        return NULL;
+    }
+
+    // Try creating display with surfaceless platform
+    EGLDisplay display = get_platform_display(
+        EGL_PLATFORM_SURFACELESS_MESA, 
+        EGL_DEFAULT_DISPLAY, 
+        NULL
+    );
+
+    if (display == EGL_NO_DISPLAY) {
+        wlr_log(WLR_ERROR, "Failed to create surfaceless display");
+        free(egl);
+        return NULL;
+    }
+
+    // Initialize EGL
+    EGLint major, minor;
+    if (!eglInitialize(display, &major, &minor)) {
+        EGLint error = eglGetError();
+        wlr_log(WLR_ERROR, "EGL initialization failed. Error: 0x%x", error);
+        free(egl);
+        return NULL;
+    }
+
+    wlr_log(WLR_INFO, "EGL Version: %d.%d", major, minor);
+
+    // Diagnostic: Get number of EGL configurations
+    EGLint num_config_total = 0;
+    eglGetConfigs(display, NULL, 0, &num_config_total);
+    wlr_log(WLR_INFO, "Total EGL configurations available: %d", num_config_total);
+
+    // Multiple configuration attempts
+    const EGLint config_attempts[][20] = {
+        {
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT | EGL_WINDOW_BIT | EGL_PIXMAP_BIT,
+            EGL_RED_SIZE, 1,
+            EGL_GREEN_SIZE, 1,
+            EGL_BLUE_SIZE, 1,
+            EGL_ALPHA_SIZE, EGL_DONT_CARE,
+            EGL_DEPTH_SIZE, EGL_DONT_CARE,
+            EGL_STENCIL_SIZE, EGL_DONT_CARE,
+            EGL_NONE
+        },
+        {
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+            EGL_RED_SIZE, 1,
+            EGL_GREEN_SIZE, 1,
+            EGL_BLUE_SIZE, 1,
+            EGL_NONE
+        }
+    };
+
+    EGLConfig config = NULL;
+    EGLint num_config = 0;
+    EGLint error;
+
+    // Try different configurations
+    for (size_t i = 0; i < sizeof(config_attempts)/sizeof(config_attempts[0]); i++) {
+        wlr_log(WLR_INFO, "Attempting EGL configuration attempt %zu", i);
+        
+        if (eglChooseConfig(display, config_attempts[i], &config, 1, &num_config)) {
+            if (num_config > 0) {
+                wlr_log(WLR_INFO, "Successfully found EGL configuration");
+                break;
+            }
+        } else {
+            error = eglGetError();
+            wlr_log(WLR_ERROR, "EGL config selection failed. Error code: 0x%x", error);
+        }
+    }
+
+    if (num_config == 0) {
+        wlr_log(WLR_ERROR, "No compatible EGL configurations found after multiple attempts");
+        eglTerminate(display);
+        free(egl);
+        return NULL;
+    }
+
+    // Detailed configuration diagnostics
+    EGLint red_size, green_size, blue_size, alpha_size;
+    eglGetConfigAttrib(display, config, EGL_RED_SIZE, &red_size);
+    eglGetConfigAttrib(display, config, EGL_GREEN_SIZE, &green_size);
+    eglGetConfigAttrib(display, config, EGL_BLUE_SIZE, &blue_size);
+    eglGetConfigAttrib(display, config, EGL_ALPHA_SIZE, &alpha_size);
+
+    wlr_log(WLR_INFO, "Selected EGL Config Details:");
+    wlr_log(WLR_INFO, "  Red Size: %d", red_size);
+    wlr_log(WLR_INFO, "  Green Size: %d", green_size);
+    wlr_log(WLR_INFO, "  Blue Size: %d", blue_size);
+    wlr_log(WLR_INFO, "  Alpha Size: %d", alpha_size);
+
+    // Context creation
+    EGLint ctx_attribs[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 2,
+        EGL_NONE
+    };
+
+    EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, ctx_attribs);
+    
+    if (context == EGL_NO_CONTEXT) {
+        error = eglGetError();
+        wlr_log(WLR_ERROR, "Context creation failed. Error: 0x%x", error);
+        eglTerminate(display);
+        free(egl);
+        return NULL;
+    }
+
+    // Store in the EGL structure
+    egl->display = display;
+    egl->context = context;
+
+    struct wlr_gles2_renderer *renderer = calloc(1, sizeof(struct wlr_gles2_renderer));
+    if (!renderer) {
+        wlr_log(WLR_ERROR, "Failed to allocate renderer");
+        eglDestroyContext(display, context);
+        eglTerminate(display);
+        free(egl);
+        return NULL;
+    }
+
+    renderer->wlr_renderer.impl = &renderer_impl;
+    renderer->egl = egl;
+    renderer->drm_fd = -1;
+
+    // Check for Zink driver
+    const char *driver = getenv("MESA_LOADER_DRIVER_OVERRIDE");
+    if (driver && strcmp(driver, "zink") == 0) {
+        wlr_log(WLR_INFO, "Using Zink (Vulkan) driver for hardware acceleration");
+    }
+
+    wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl);
+
+    return &renderer->wlr_renderer;
 }

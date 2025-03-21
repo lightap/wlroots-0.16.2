@@ -19,64 +19,69 @@ PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT;
 PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC eglCreatePlatformWindowSurfaceEXT;
 
 const EGLint config_attribs[] = {
-	EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-	EGL_RED_SIZE, 8,
-	EGL_GREEN_SIZE, 8,
-	EGL_BLUE_SIZE, 8,
-	EGL_ALPHA_SIZE, 8,
-	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-	EGL_NONE,
+    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR,
+    EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT | EGL_PIXMAP_BIT,
+    EGL_RED_SIZE, 8,
+    EGL_GREEN_SIZE, 8, 
+    EGL_BLUE_SIZE, 8,
+    EGL_ALPHA_SIZE, 0,  // Note the 0 here
+    EGL_DEPTH_SIZE, 24, 
+    EGL_STENCIL_SIZE, 0,
+    EGL_NONE
 };
 
 const EGLint context_attribs[] = {
-	EGL_CONTEXT_CLIENT_VERSION, 2,
-	EGL_NONE,
+    EGL_CONTEXT_CLIENT_VERSION, 2,
+    EGL_NONE
 };
 
 bool egl_init(struct wl_display *display) {
-	const char *client_exts_str =
-		eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
-	if (client_exts_str == NULL) {
-		if (eglGetError() == EGL_BAD_DISPLAY) {
-			fprintf(stderr, "EGL_EXT_client_extensions not supported\n");
-		} else {
-			fprintf(stderr, "Failed to query EGL client extensions\n");
-		}
-		return false;
-	}
+    const char *client_exts_str = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    if (client_exts_str == NULL) {
+        if (eglGetError() == EGL_BAD_DISPLAY) {
+            fprintf(stderr, "EGL_EXT_client_extensions not supported\n");
+        } else {
+            fprintf(stderr, "Failed to query EGL client extensions\n");
+        }
+        return false;
+    }
 
-	if (!strstr(client_exts_str, "EGL_EXT_platform_base")) {
-		fprintf(stderr, "EGL_EXT_platform_base not supported\n");
-		return false;
-	}
+    // Check for needed extensions
+    bool has_platform_base = strstr(client_exts_str, "EGL_EXT_platform_base");
+    bool has_platform_wayland = strstr(client_exts_str, "EGL_EXT_platform_wayland");
+    bool has_platform_surfaceless = strstr(client_exts_str, "EGL_MESA_platform_surfaceless");
 
-	if (!strstr(client_exts_str, "EGL_EXT_platform_wayland")) {
-		fprintf(stderr, "EGL_EXT_platform_wayland not supported\n");
-		return false;
-	}
+    if (!has_platform_base) {
+        fprintf(stderr, "EGL_EXT_platform_base not supported\n");
+        return false;
+    }
 
-	eglGetPlatformDisplayEXT =
-		(void *)eglGetProcAddress("eglGetPlatformDisplayEXT");
-	if (eglGetPlatformDisplayEXT == NULL) {
-		fprintf(stderr, "Failed to get eglGetPlatformDisplayEXT\n");
-		return false;
-	}
+    eglGetPlatformDisplayEXT = 
+        (void *)eglGetProcAddress("eglGetPlatformDisplayEXT");
+    if (eglGetPlatformDisplayEXT == NULL) {
+        fprintf(stderr, "Failed to get eglGetPlatformDisplayEXT\n");
+        return false;
+    }
 
-	eglCreatePlatformWindowSurfaceEXT =
-		(void *)eglGetProcAddress("eglCreatePlatformWindowSurfaceEXT");
-	if (eglCreatePlatformWindowSurfaceEXT == NULL) {
-		fprintf(stderr, "Failed to get eglCreatePlatformWindowSurfaceEXT\n");
-		return false;
-	}
+    // Try platforms in order of preference
+    egl_display = EGL_NO_DISPLAY;
+    
+    if (has_platform_surfaceless) {
+        egl_display = eglGetPlatformDisplayEXT(EGL_PLATFORM_SURFACELESS_MESA, 
+                                             EGL_DEFAULT_DISPLAY, NULL);
+    }
+    
+    if (egl_display == EGL_NO_DISPLAY && has_platform_wayland) {
+        egl_display = eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT,
+                                             display, NULL);
+    }
 
-	egl_display =
-		eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT,
-			display, NULL);
-	if (egl_display == EGL_NO_DISPLAY) {
-		fprintf(stderr, "Failed to create EGL display\n");
-		goto error;
-	}
+    if (egl_display == EGL_NO_DISPLAY) {
+        fprintf(stderr, "Failed to create EGL display\n");
+        goto error;
+    }
 
+    // Rest of function remains the same...
 	if (eglInitialize(egl_display, NULL, NULL) == EGL_FALSE) {
 		fprintf(stderr, "Failed to initialize EGL\n");
 		goto error;

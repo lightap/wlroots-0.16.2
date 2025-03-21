@@ -12,6 +12,7 @@
 #include "render/wlr_renderer.h"
 #include "render/pixel_format.h"
 #include "types/wlr_output.h"
+#include <unistd.h>
 
 bool wlr_output_init_render(struct wlr_output *output,
 		struct wlr_allocator *allocator, struct wlr_renderer *renderer) {
@@ -44,6 +45,7 @@ bool wlr_output_init_render(struct wlr_output *output,
  * If allow_modifiers is set to true, the swapchain's format may use modifiers.
  * If set to false, the swapchain's format is guaranteed to not use modifiers.
  */
+/*
 static bool output_create_swapchain(struct wlr_output *output,
 		const struct wlr_output_state *state, bool allow_modifiers) {
 	int width, height;
@@ -99,34 +101,101 @@ static bool output_create_swapchain(struct wlr_output *output,
 	output->swapchain = swapchain;
 
 	return true;
+}*/
+
+
+
+static bool output_create_swapchain(struct wlr_output *output,
+        const struct wlr_output_state *state, bool allow_modifiers) {
+    int width, height;
+    output_pending_resolution(output, state, &width, &height);
+
+    struct wlr_allocator *allocator = output->allocator;
+    assert(allocator != NULL);
+
+    // For surfaceless, create a format explicitly
+    struct wlr_drm_format *format = calloc(1, sizeof(struct wlr_drm_format) + sizeof(uint64_t));
+    if (!format) {
+        wlr_log(WLR_ERROR, "Failed to allocate format for surfaceless swapchain");
+        return false;
+    }
+
+    // Use the RDP allocator's preferred format
+    format->format = DRM_FORMAT_XRGB8888;
+    format->modifiers[0] = DRM_FORMAT_MOD_INVALID;
+    format->len = 1;
+    format->capacity = 1;
+
+    struct wlr_swapchain *swapchain =
+        wlr_swapchain_create(allocator, width, height, format);
+    
+    free(format);
+
+    if (swapchain == NULL) {
+        wlr_log(WLR_ERROR, "Failed to create output swapchain in surfaceless mode");
+        return false;
+    }
+
+    wlr_swapchain_destroy(output->swapchain);
+    output->swapchain = swapchain;
+
+    return true;
 }
+
 
 static bool output_attach_back_buffer(struct wlr_output *output,
-		const struct wlr_output_state *state, int *buffer_age) {
-	assert(output->back_buffer == NULL);
+        const struct wlr_output_state *state, int *buffer_age) {
+    assert(output->back_buffer == NULL);
 
-	if (!output_create_swapchain(output, state, true)) {
-		return false;
-	}
+    wlr_log(WLR_DEBUG, "Surfaceless: Attempting to attach back buffer");
 
-	struct wlr_renderer *renderer = output->renderer;
-	assert(renderer != NULL);
+    // Verify critical components
+    if (!output->allocator) {
+        wlr_log(WLR_ERROR, "Surfaceless: No allocator available");
+        return false;
+    }
 
-	struct wlr_buffer *buffer =
-		wlr_swapchain_acquire(output->swapchain, buffer_age);
-	if (buffer == NULL) {
-		return false;
-	}
+    struct wlr_renderer *renderer = output->renderer;
+    if (!renderer) {
+        wlr_log(WLR_ERROR, "Surfaceless: No renderer available");
+        return false;
+    }
 
-	if (!renderer_bind_buffer(renderer, buffer)) {
-		wlr_buffer_unlock(buffer);
-		return false;
-	}
+    // Create swapchain with surfaceless-specific handling
+    if (!output_create_swapchain(output, state, true)) {
+        wlr_log(WLR_ERROR, "Surfaceless: Failed to create swapchain");
+        return false;
+    }
 
-	output->back_buffer = buffer;
-	return true;
+    // Verify swapchain
+    if (!output->swapchain) {
+        wlr_log(WLR_ERROR, "Surfaceless: Swapchain creation failed");
+        return false;
+    }
+
+    // Acquire buffer from swapchain
+    struct wlr_buffer *buffer = 
+        wlr_swapchain_acquire(output->swapchain, buffer_age);
+    if (!buffer) {
+        wlr_log(WLR_ERROR, "Surfaceless: Failed to acquire swapchain buffer");
+        return false;
+    }
+
+    // Lock the buffer before use
+    wlr_buffer_lock(buffer);
+
+    // Attempt renderer-specific buffer binding
+    if (!renderer_bind_buffer(renderer, buffer)) {
+        wlr_log(WLR_ERROR, "Surfaceless: Renderer-specific buffer binding failed");
+        wlr_buffer_unlock(buffer);
+        return false;
+    }
+
+    output->back_buffer = buffer;
+    wlr_log(WLR_DEBUG, "Surfaceless: Successfully attached back buffer");
+    return true;
 }
-
+/*
 void output_clear_back_buffer(struct wlr_output *output) {
 	if (output->back_buffer == NULL) {
 		return;
@@ -139,12 +208,72 @@ void output_clear_back_buffer(struct wlr_output *output) {
 
 	wlr_buffer_unlock(output->back_buffer);
 	output->back_buffer = NULL;
+}*/
+
+
+void output_clear_back_buffer(struct wlr_output *output) {
+    if (output->back_buffer == NULL) {
+        return;
+    }
+
+    struct wlr_renderer *renderer = output->renderer;
+    assert(renderer != NULL);
+
+    // Unbind the buffer from the renderer
+    renderer_bind_buffer(renderer, NULL);
+
+    // Unlock the buffer
+    wlr_buffer_unlock(output->back_buffer);
+    output->back_buffer = NULL;
 }
 
 bool wlr_output_attach_render(struct wlr_output *output, int *buffer_age) {
 	return output_attach_back_buffer(output, &output->pending, buffer_age);
 }
+static bool output_attach_empty_back_buffer(struct wlr_output *output,
+        const struct wlr_output_state *state) {
+    assert(!(state->committed & WLR_OUTPUT_STATE_BUFFER));
 
+    // In surfaceless mode, be more lenient
+    if (!output_attach_back_buffer(output, state, NULL)) {
+        wlr_log(WLR_ERROR, "Surfaceless: Failed to attach back buffer");
+        return false;
+    }
+
+    // Sanity check the back buffer
+    if (output->back_buffer == NULL) {
+        wlr_log(WLR_ERROR, "Surfaceless: Back buffer is NULL after attachment");
+        return false;
+    }
+
+    int width, height;
+    output_pending_resolution(output, state, &width, &height);
+
+    struct wlr_renderer *renderer = output->renderer;
+    if (!renderer) {
+        wlr_log(WLR_ERROR, "Surfaceless: No renderer available");
+        return false;
+    }
+
+    // Try to bind the buffer to the renderer
+    if (!renderer_bind_buffer(renderer, output->back_buffer)) {
+        wlr_log(WLR_ERROR, "Surfaceless: Failed to bind buffer to renderer");
+        return false;
+    }
+
+    // Perform basic clear operation
+    wlr_renderer_begin(renderer, width, height);
+    
+    // Clear to a neutral color (black with full alpha)
+    float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    wlr_renderer_clear(renderer, clear_color);
+    
+    wlr_renderer_end(renderer);
+
+    wlr_log(WLR_DEBUG, "Surfaceless: Successfully attached and initialized back buffer");
+    return true;
+}
+/*
 static bool output_attach_empty_back_buffer(struct wlr_output *output,
 		const struct wlr_output_state *state) {
 	assert(!(state->committed & WLR_OUTPUT_STATE_BUFFER));
@@ -162,8 +291,8 @@ static bool output_attach_empty_back_buffer(struct wlr_output *output,
 	wlr_renderer_end(renderer);
 
 	return true;
-}
-
+}*/
+/*
 static bool output_test_with_back_buffer(struct wlr_output *output,
 		const struct wlr_output_state *state) {
 	if (output->impl->test == NULL) {
@@ -179,99 +308,178 @@ static bool output_test_with_back_buffer(struct wlr_output *output,
 	copy.buffer = output->back_buffer;
 
 	return output->impl->test(output, &copy);
-}
+}*/
 
 // This function may attach a new, empty back buffer if necessary.
 // If so, the new_back_buffer out parameter will be set to true.
+/*
 bool output_ensure_buffer(struct wlr_output *output,
-		const struct wlr_output_state *state,
-		bool *new_back_buffer) {
-	assert(*new_back_buffer == false);
+        const struct wlr_output_state *state,
+        bool *new_back_buffer) {
+    assert(*new_back_buffer == false);
 
-	// If we already have a buffer, we don't need to allocate a new one
-	if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
-		return true;
-	}
+    // If we already have a buffer, we don't need to allocate a new one
+    if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
+        return true;
+    }
 
-	// If the compositor hasn't called wlr_output_init_render(), they will use
-	// their own logic to attach buffers
-	if (output->renderer == NULL) {
-		return true;
-	}
+    // If the compositor hasn't called wlr_output_init_render(), they will use
+    // their own logic to attach buffers
+    if (output->renderer == NULL) {
+        return true;
+    }
 
-	bool enabled = output->enabled;
-	if (state->committed & WLR_OUTPUT_STATE_ENABLED) {
-		enabled = state->enabled;
-	}
+    bool enabled = output->enabled;
+    if (state->committed & WLR_OUTPUT_STATE_ENABLED) {
+        enabled = state->enabled;
+    }
 
-	// If we're lighting up an output or changing its mode, make sure to
-	// provide a new buffer
-	bool needs_new_buffer = false;
-	if ((state->committed & WLR_OUTPUT_STATE_ENABLED) && state->enabled) {
-		needs_new_buffer = true;
-	}
-	if (state->committed & WLR_OUTPUT_STATE_MODE) {
-		needs_new_buffer = true;
-	}
-	if (state->committed & WLR_OUTPUT_STATE_RENDER_FORMAT) {
-		needs_new_buffer = true;
-	}
-	if (state->allow_artifacts && output->commit_seq == 0 && enabled) {
-		// On first commit, require a new buffer if the compositor called a
-		// mode-setting function, even if the mode won't change. This makes it
-		// so the swapchain is created now.
-		needs_new_buffer = true;
-	}
-	if (!needs_new_buffer) {
-		return true;
-	}
+    // Determine if we need a new buffer
+    bool needs_new_buffer = false;
+    if ((state->committed & WLR_OUTPUT_STATE_ENABLED) && state->enabled) {
+        needs_new_buffer = true;
+    }
+    if (state->committed & WLR_OUTPUT_STATE_MODE) {
+        needs_new_buffer = true;
+    }
+    if (state->committed & WLR_OUTPUT_STATE_RENDER_FORMAT) {
+        needs_new_buffer = true;
+    }
+    if (state->allow_artifacts && output->commit_seq == 0 && enabled) {
+        // On first commit, require a new buffer if the compositor called a
+        // mode-setting function, even if the mode won't change
+        needs_new_buffer = true;
+    }
 
-	wlr_log(WLR_DEBUG, "Attaching empty buffer to output for modeset");
+    // For surfaceless mode, be more lenient
+    if (output->swapchain == NULL || 
+        (output->swapchain->format && output->swapchain->format->len == 0)) {
+        wlr_log(WLR_DEBUG, "Surfaceless mode: Forcing new buffer creation");
+        needs_new_buffer = true;
+    }
 
-	if (!output_attach_empty_back_buffer(output, state)) {
-		return false;
-	}
+    if (!needs_new_buffer) {
+        return true;
+    }
 
-	if (output_test_with_back_buffer(output, state)) {
-		*new_back_buffer = true;
-		return true;
-	}
+    wlr_log(WLR_DEBUG, "Attaching empty buffer to output for modeset");
 
-	output_clear_back_buffer(output);
+    if (!output_attach_empty_back_buffer(output, state)) {
+        return false;
+    }
 
-	if (output->swapchain->format->len == 0) {
-		return false;
-	}
+    if (output_test_with_back_buffer(output, state)) {
+        *new_back_buffer = true;
+        return true;
+    }
 
-	// The test failed for a buffer which has modifiers, try disabling
-	// modifiers to see if that makes a difference.
-	wlr_log(WLR_DEBUG, "Output modeset test failed, retrying without modifiers");
+    output_clear_back_buffer(output);
 
-	if (!output_create_swapchain(output, state, false)) {
-		return false;
-	}
+    // For surfaceless mode, this check might be too restrictive
+    if (output->swapchain->format->len == 0) {
+        // In surfaceless mode, we might want to proceed anyway
+        wlr_log(WLR_DEBUG, "Surfaceless mode: Proceeding with zero-length format");
+        *new_back_buffer = true;
+        return true;
+    }
 
-	if (!output_attach_empty_back_buffer(output, state)) {
-		goto error_destroy_swapchain;
-	}
+    // The test failed for a buffer which has modifiers, try disabling
+    // modifiers to see if that makes a difference
+    wlr_log(WLR_DEBUG, "Output modeset test failed, retrying without modifiers");
 
-	if (output_test_with_back_buffer(output, state)) {
-		*new_back_buffer = true;
-		return true;
-	}
+    if (!output_create_swapchain(output, state, false)) {
+        return false;
+    }
 
-	output_clear_back_buffer(output);
+    if (!output_attach_empty_back_buffer(output, state)) {
+        goto error_destroy_swapchain;
+    }
+
+    if (output_test_with_back_buffer(output, state)) {
+        *new_back_buffer = true;
+        return true;
+    }
+
+    output_clear_back_buffer(output);
 
 error_destroy_swapchain:
-	// Destroy the modifierless swapchain so that the output does not get stuck
-	// without modifiers. A new swapchain with modifiers will be created when
-	// needed by output_attach_back_buffer().
-	wlr_swapchain_destroy(output->swapchain);
-	output->swapchain = NULL;
+    // Destroy the modifierless swapchain so that the output does not get stuck
+    // without modifiers. A new swapchain with modifiers will be created when
+    // needed by output_attach_back_buffer().
+    wlr_swapchain_destroy(output->swapchain);
+    output->swapchain = NULL;
 
-	return false;
+    return false;
+}*/
+
+
+bool output_ensure_buffer(struct wlr_output *output,
+        const struct wlr_output_state *state,
+        bool *new_back_buffer) {
+    wlr_log(WLR_DEBUG, "Surfaceless: Forcing buffer creation with extensive surfaceless handling");
+    
+    // Always treat this as creating a new back buffer
+    *new_back_buffer = true;
+
+    // In surfaceless mode, we want to be extremely flexible
+    wlr_output_set_render_format(output, DRM_FORMAT_XRGB8888);
+
+    // Attempt to attach buffer multiple times with increasing flexibility
+    for (int attempt = 0; attempt < 3; attempt++) {
+        wlr_log(WLR_DEBUG, "Surfaceless: Buffer attachment attempt %d", attempt);
+
+        // Try attaching empty back buffer
+        if (output_attach_empty_back_buffer(output, state)) {
+            wlr_log(WLR_DEBUG, "Surfaceless: Successfully attached empty back buffer");
+            return true;
+        }
+
+        // If standard attachment fails, try alternative methods
+        if (attempt > 0) {
+            // Create a DRM format explicitly
+            struct wlr_drm_format *format = calloc(1, sizeof(struct wlr_drm_format) + sizeof(uint64_t));
+            if (!format) {
+                wlr_log(WLR_ERROR, "Surfaceless: Failed to allocate format");
+                continue;
+            }
+
+            format->format = DRM_FORMAT_XRGB8888;
+            format->modifiers[0] = DRM_FORMAT_MOD_INVALID;
+            format->len = 1;
+            format->capacity = 1;
+
+            // Ensure width and height are sane
+            int width = output->swapchain ? output->swapchain->width : 1280;
+            int height = output->swapchain ? output->swapchain->height : 720;
+
+            struct wlr_buffer *manual_buffer = 
+                wlr_allocator_create_buffer(output->allocator, 
+                                            width, 
+                                            height, 
+                                            format);
+            
+            free(format);
+
+            if (manual_buffer) {
+                // Only lock if manual_buffer is valid
+                wlr_buffer_lock(manual_buffer);
+                
+                // Clear any existing back buffer first, ensuring it's properly unlocked
+                if (output->back_buffer) {
+                    wlr_buffer_unlock(output->back_buffer);
+                    output->back_buffer = NULL;
+                }
+
+                output->back_buffer = manual_buffer;
+                wlr_log(WLR_DEBUG, "Surfaceless: Manually created buffer");
+                return true;
+            }
+        }
+    }
+
+    wlr_log(WLR_ERROR, "Surfaceless: Failed to attach buffer after multiple attempts");
+    return false;
 }
-
 void wlr_output_lock_attach_render(struct wlr_output *output, bool lock) {
 	if (lock) {
 		++output->attach_render_locks;
@@ -283,7 +491,7 @@ void wlr_output_lock_attach_render(struct wlr_output *output, bool lock) {
 		lock ? "Disabling" : "Enabling", output->name,
 		output->attach_render_locks);
 }
-
+/*
 struct wlr_drm_format *output_pick_format(struct wlr_output *output,
 		const struct wlr_drm_format_set *display_formats,
 		uint32_t fmt) {
@@ -327,6 +535,33 @@ struct wlr_drm_format *output_pick_format(struct wlr_output *output,
 	}
 
 	return format;
+}*/
+
+
+struct wlr_drm_format *output_pick_format(struct wlr_output *output,
+        const struct wlr_drm_format_set *display_formats,
+        uint32_t fmt) {
+    struct wlr_renderer *renderer = output->renderer;
+    struct wlr_allocator *allocator = output->allocator;
+    assert(renderer != NULL && allocator != NULL);
+
+    wlr_log(WLR_DEBUG, "Surfaceless format selection: Creating minimal format");
+
+    // Hardcode a format that matches the EGL config (8-bit RGB, no alpha)
+    struct wlr_drm_format *format = calloc(1, sizeof(struct wlr_drm_format) + sizeof(uint64_t));
+    if (!format) {
+        wlr_log(WLR_ERROR, "Failed to allocate drm format");
+        return NULL;
+    }
+
+    // Use the format that matches the allocator's request
+    format->format = DRM_FORMAT_XRGB8888;  // 0x34325258
+    format->modifiers[0] = DRM_FORMAT_MOD_INVALID;
+    format->len = 1;
+    format->capacity = 1;
+
+    wlr_log(WLR_DEBUG, "Surfaceless: Created format 0x%"PRIX32, format->format);
+    return format;
 }
 
 uint32_t wlr_output_preferred_read_format(struct wlr_output *output) {

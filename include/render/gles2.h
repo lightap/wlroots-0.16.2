@@ -17,8 +17,6 @@
 
 struct wlr_gles2_pixel_format {
 	uint32_t drm_format;
-	// optional field, if empty then internalformat = format
-	GLint gl_internalformat;
 	GLint gl_format, gl_type;
 	bool has_alpha;
 };
@@ -26,6 +24,7 @@ struct wlr_gles2_pixel_format {
 struct wlr_gles2_tex_shader {
 	GLuint program;
 	GLint proj;
+	GLint invert_y;
 	GLint tex;
 	GLint alpha;
 	GLint pos_attrib;
@@ -39,6 +38,9 @@ struct wlr_gles2_renderer {
 	struct wlr_egl *egl;
 	int drm_fd;
 
+	GLuint quad_vbo;
+    GLuint quad_vao;
+
 	const char *exts_str;
 	struct {
 		bool EXT_read_format_bgra;
@@ -47,7 +49,6 @@ struct wlr_gles2_renderer {
 		bool OES_egl_image;
 		bool EXT_texture_type_2_10_10_10_REV;
 		bool OES_texture_half_float_linear;
-		bool EXT_texture_norm16;
 	} exts;
 
 	struct {
@@ -88,6 +89,8 @@ struct wlr_gles2_buffer {
 	GLuint fbo;
 
 	struct wlr_addon addon;
+	  // Add new field for texture
+    GLuint texture;  // New field for texture handle
 };
 
 struct wlr_gles2_texture {
@@ -103,6 +106,7 @@ struct wlr_gles2_texture {
 
 	EGLImageKHR image;
 
+	bool inverted_y;
 	bool has_alpha;
 
 	// Only affects target == GL_TEXTURE_2D
@@ -126,6 +130,8 @@ struct wlr_gles2_renderer *gles2_get_renderer(
 struct wlr_gles2_texture *gles2_get_texture(
 	struct wlr_texture *wlr_texture);
 
+struct wlr_texture *gles2_texture_from_wl_drm(struct wlr_renderer *wlr_renderer,
+	struct wl_resource *data);
 struct wlr_texture *gles2_texture_from_buffer(struct wlr_renderer *wlr_renderer,
 	struct wlr_buffer *buffer);
 void gles2_texture_destroy(struct wlr_gles2_texture *texture);
@@ -134,5 +140,9 @@ void push_gles2_debug_(struct wlr_gles2_renderer *renderer,
 	const char *file, const char *func);
 #define push_gles2_debug(renderer) push_gles2_debug_(renderer, _WLR_FILENAME, __func__)
 void pop_gles2_debug(struct wlr_gles2_renderer *renderer);
+
+#if WLR_HAS_GLES2_RENDERER
+struct wlr_renderer *wlr_gles2_renderer_create_surfaceless(void);
+#endif
 
 #endif

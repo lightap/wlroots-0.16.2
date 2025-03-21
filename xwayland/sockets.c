@@ -15,10 +15,10 @@
 #include "sockets.h"
 
 static const char lock_fmt[] = "/tmp/.X%d-lock";
-static const char socket_dir[] = "/tmp/.X11-unix";
-static const char socket_fmt[] = "/tmp/.X11-unix/X%d";
+static const char socket_dir[] = "/tmp/.RDP-unix";
+static const char socket_fmt[] = "/tmp/.RDP-unix/X%d";
 #ifndef __linux__
-static const char socket_fmt2[] = "/tmp/.X11-unix/X%d_";
+static const char socket_fmt2[] = "/tmp/.RDP-unix/X%d_";
 #endif
 
 bool set_cloexec(int fd, bool cloexec) {
@@ -116,7 +116,7 @@ static bool open_sockets(int socks[2], int display) {
 
 	if (mkdir(socket_dir, 0755) == 0) {
 		wlr_log(WLR_INFO, "Created %s ourselves -- other users will "
-			"be unable to create X11 UNIX sockets of their own",
+			"be unable to create RDP UNIX sockets of their own",
 			socket_dir);
 	} else if (errno != EEXIST) {
 		wlr_log_errno(WLR_ERROR, "Unable to mkdir %s", socket_dir);

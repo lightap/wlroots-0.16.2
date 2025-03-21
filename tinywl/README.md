@@ -19,8 +19,8 @@ And run `make`.
 
 ## Running TinyWL
 
-You can run TinyWL with `./tinywl`. In an existing Wayland or X11 session,
-tinywl will open a Wayland or X11 window respectively to act as a virtual
+You can run TinyWL with `./tinywl`. In an existing Wayland or RDP session,
+tinywl will open a Wayland or RDP window respectively to act as a virtual
 display. You can then open Wayland windows by setting `WAYLAND_DISPLAY` to the
 value shown in the logs. You can also run `./tinywl` from a TTY.
 
@@ -39,7 +39,7 @@ Notable omissions from TinyWL:
 - HiDPI support
 - Any kind of configuration, e.g. output layout
 - Any protocol other than xdg-shell (e.g. layer-shell, for
-  panels/taskbars/etc; or Xwayland, for proxied X11 windows)
+  panels/taskbars/etc; or Xwayland, for proxied RDP windows)
 - Optional protocols, e.g. screen capture, primary selection, virtual
   keyboard, etc. Most of these are plug-and-play with wlroots, but they're
   omitted for brevity.

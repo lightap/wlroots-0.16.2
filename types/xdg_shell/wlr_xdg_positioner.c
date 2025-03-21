@@ -394,7 +394,7 @@ static bool xdg_positioner_rules_unconstrain_by_slide(
 			// Note that the protocol doesn't specify the behavior when there is no
 			// gravity on the axis (which is what e.g. GTK tooltips use). In this
 			// case, fall back to sliding the box to the right/bottom, which is what
-			// GTK X11 popup adjustment code does.
+			// GTK RDP popup adjustment code does.
 			if (gravity & WLR_EDGE_LEFT) {
 				box->x -= offsets->right;
 			} else {

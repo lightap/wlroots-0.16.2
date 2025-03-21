@@ -832,7 +832,7 @@ static void read_surface_property(struct wlr_xwm *xwm,
 		read_surface_startup_id(xwm, xsurface, reply);
 	} else {
 		char *prop_name = xwm_get_atom_name(xwm, property);
-		wlr_log(WLR_DEBUG, "unhandled X11 property %" PRIu32 " (%s) for window %" PRIu32,
+		wlr_log(WLR_DEBUG, "unhandled RDP property %" PRIu32 " (%s) for window %" PRIu32,
 			property, prop_name ? prop_name : "(null)", xsurface->window_id);
 		free(prop_name);
 	}
@@ -1449,7 +1449,7 @@ static void xwm_handle_client_message(struct wlr_xwm *xwm,
 		xwm_handle_wm_change_state_message(xwm, ev);
 	} else if (!xwm_handle_selection_client_message(xwm, ev)) {
 		char *type_name = xwm_get_atom_name(xwm, ev->type);
-		wlr_log(WLR_DEBUG, "unhandled x11 client message %" PRIu32 " (%s)", ev->type,
+		wlr_log(WLR_DEBUG, "unhandled RDP client message %" PRIu32 " (%s)", ev->type,
 			type_name ? type_name : "(null)");
 		free(type_name);
 	}
@@ -1546,13 +1546,13 @@ static void xwm_handle_unhandled_event(struct wlr_xwm *xwm, xcb_generic_event_t 
 		return;
 	}
 
-	wlr_log(WLR_DEBUG, "unhandled X11 event: %s (%u)", event_name, ev->response_type);
+	wlr_log(WLR_DEBUG, "unhandled RDP event: %s (%u)", event_name, ev->response_type);
 #else
-	wlr_log(WLR_DEBUG, "unhandled X11 event: %u", ev->response_type);
+	wlr_log(WLR_DEBUG, "unhandled RDP event: %u", ev->response_type);
 #endif
 }
 
-static int x11_event_handler(int fd, uint32_t mask, void *data) {
+static int RDP_event_handler(int fd, uint32_t mask, void *data) {
 	int count = 0;
 	xcb_generic_event_t *event;
 	struct wlr_xwm *xwm = data;
@@ -1793,7 +1793,7 @@ static void xwm_get_resources(struct wlr_xwm *xwm) {
 		free(reply);
 
 		if (error) {
-			wlr_log(WLR_ERROR, "could not resolve atom %s, x11 error code %d",
+			wlr_log(WLR_ERROR, "could not resolve atom %s, RDP error code %d",
 				atom_map[i], error->error_code);
 			free(error);
 			return;
@@ -2035,7 +2035,7 @@ struct wlr_xwm *xwm_create(struct wlr_xwayland *xwayland, int wm_fd) {
 	struct wl_event_loop *event_loop =
 		wl_display_get_event_loop(xwayland->wl_display);
 	xwm->event_source = wl_event_loop_add_fd(event_loop, wm_fd,
-		WL_EVENT_READABLE, x11_event_handler, xwm);
+		WL_EVENT_READABLE, RDP_event_handler, xwm);
 	wl_event_source_check(xwm->event_source);
 
 	xwm_get_resources(xwm);

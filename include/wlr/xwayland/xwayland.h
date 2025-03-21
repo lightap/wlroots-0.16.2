@@ -58,7 +58,7 @@ enum wlr_xwayland_surface_decorations {
 /**
  * This represents the input focus described as follows:
  *
- * https://www.x.org/releases/X11R7.6/doc/xorg-docs/specs/ICCCM/icccm.html#input_focus
+ * https://www.x.org/releases/RDPR7.6/doc/xorg-docs/specs/ICCCM/icccm.html#input_focus
  */
 enum wlr_xwayland_icccm_input_model {
 	WLR_ICCCM_INPUT_MODEL_NONE = 0,
