@@ -42,6 +42,8 @@ struct wlr_RDP_backend {
     freerdp_listener *listener;
     freerdp_peer *rdp_peer;
     struct wl_list peers;
+    struct wl_event_source *fd_event_sources[32]; // Added for event sources
+    int fd_count; // Added to track number of event sources
 };
 
 /**

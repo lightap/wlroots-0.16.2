@@ -1423,7 +1423,7 @@ if (server.allocator == NULL) {
 }*/
 
 
-
+/*
 int main(int argc, char *argv[]) {
     wlr_log_init(WLR_DEBUG, NULL);
     char *startup_cmd = NULL;
@@ -1447,14 +1447,14 @@ int main(int argc, char *argv[]) {
 
     struct tinywl_server server = {0};  // Zero initialize all fields
 
-    /* Create Wayland display first */
+    //Create Wayland display first 
     server.wl_display = wl_display_create();
     if (!server.wl_display) {
         wlr_log(WLR_ERROR, "Cannot create Wayland display");
         return 1;
     }
 
-    /* Create backend first */
+    // Create backend first
     const char *backends_env = getenv("WLR_BACKENDS");
     if (backends_env && strcmp(backends_env, "RDP") == 0) {
         wlr_log(WLR_INFO, "Creating RDP backend");
@@ -1470,7 +1470,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Create global renderer */
+    // Create global renderer 
 //    server.renderer = wlr_renderer_autocreate(server.backend);
     server.renderer = wlr_gles2_renderer_create_surfaceless();
     if (!server.renderer) {
@@ -1481,13 +1481,13 @@ int main(int argc, char *argv[]) {
     }
     wlr_renderer_init_wl_display(server.renderer, server.wl_display);
 
-    /* Assign renderer to RDP backend if applicable */
+    // Assign renderer to RDP backend if applicable 
     if (backends_env && strcmp(backends_env, "RDP") == 0) {
         // No direct renderer assignment; RDP backend retrieves via wlr_backend_get_renderer
         wlr_log(WLR_INFO, "RDP backend will retrieve renderer via wlr_backend_get_renderer");
     }
 
-    /* Create allocator */
+    // Create allocator 
     server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
     if (!server.allocator) {
         wlr_log(WLR_ERROR, "Failed to create allocator");
@@ -1497,38 +1497,38 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Initialize wlroots interfaces */
+    // Initialize wlroots interfaces 
     wlr_compositor_create(server.wl_display, server.renderer);
     wlr_subcompositor_create(server.wl_display);
     wlr_data_device_manager_create(server.wl_display);
 
-    /* Create output layout */
+    // Create output layout 
     server.output_layout = wlr_output_layout_create();
 
-    /* Configure listener for new outputs */
+    // Configure listener for new outputs 
     wl_list_init(&server.outputs);
     server.new_output.notify = server_new_output;
     wl_signal_add(&server.backend->events.new_output, &server.new_output);
 
-    /* Create scene graph for rendering */
+    // Create scene graph for rendering 
     server.scene = wlr_scene_create();
     wlr_scene_attach_output_layout(server.scene, server.output_layout);
 
-    /* Set up xdg-shell for application windows */
+    // Set up xdg-shell for application windows
     wl_list_init(&server.views);
     server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
     server.new_xdg_surface.notify = server_new_xdg_surface;
     wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_surface);
 
-    /* Create cursor tracking */
+    // Create cursor tracking 
     server.cursor = wlr_cursor_create();
     wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
 
-    /* Create cursor theme */
+    // Create cursor theme 
     server.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
     wlr_xcursor_manager_load(server.cursor_mgr, 1);
 
-    /* Configure cursor input handling */
+    // Configure cursor input handling 
     server.cursor_mode = TINYWL_CURSOR_PASSTHROUGH;
     server.cursor_motion.notify = server_cursor_motion;
     wl_signal_add(&server.cursor->events.motion, &server.cursor_motion);
@@ -1541,7 +1541,7 @@ int main(int argc, char *argv[]) {
     server.cursor_frame.notify = server_cursor_frame;
     wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
 
-    /* Configure seat for input devices */
+    // Configure seat for input devices 
     wl_list_init(&server.keyboards);
     server.new_input.notify = server_new_input;
     wl_signal_add(&server.backend->events.new_input, &server.new_input);
@@ -1551,25 +1551,25 @@ int main(int argc, char *argv[]) {
     server.request_set_selection.notify = seat_request_set_selection;
     wl_signal_add(&server.seat->events.request_set_selection, &server.request_set_selection);
 
-    /* Add Wayland socket */
-/*    const char *socket = wl_display_add_socket_auto(server.wl_display);
-    if (!socket) {
-        wlr_log(WLR_ERROR, "Unable to open Wayland socket");
-        if (server.backend) {
-            wlr_backend_destroy(server.backend);
-        }
-        if (server.allocator) {
-            wlr_allocator_destroy(server.allocator);
-        }
-        if (server.renderer) {
-            wlr_renderer_destroy(server.renderer);
-        }
-        wl_display_destroy(server.wl_display);
-        return 1;
-    }
-*/
+    // Add Wayland socket 
+//    const char *socket = wl_display_add_socket_auto(server.wl_display);
+//    if (!socket) {
+//        wlr_log(WLR_ERROR, "Unable to open Wayland socket");
+//        if (server.backend) {
+//            wlr_backend_destroy(server.backend);
+//       }
+//        if (server.allocator) {
+//            wlr_allocator_destroy(server.allocator);
+//        }
+//        if (server.renderer) {
+//            wlr_renderer_destroy(server.renderer);
+//        }
+//        wl_display_destroy(server.wl_display);
+//        return 1;
+//    }
+//
 
-    /* Add Wayland socket */
+    // Add Wayland socket 
 const char *socket = wl_display_add_socket_auto(server.wl_display);
 if (!socket) {
     wlr_log(WLR_ERROR, "Unable to create wayland socket");
@@ -1577,11 +1577,11 @@ if (!socket) {
     exit(1);
 }
 
-/* After socket creation, set the environment variable */
+// After socket creation, set the environment variable 
 char wayland_display[32];
 snprintf(wayland_display, sizeof(wayland_display), "wayland-%d", 1);
 setenv("WAYLAND_DISPLAY", wayland_display, 1);
-    /* Start the backend */
+    // Start the backend 
     if (!wlr_backend_start(server.backend)) {
         wlr_log(WLR_ERROR, "Failed to start backend");
         wlr_backend_destroy(server.backend);
@@ -1589,7 +1589,7 @@ setenv("WAYLAND_DISPLAY", wayland_display, 1);
         return 1;
     }
 
-    /* Set environment and potentially run startup command */
+    // Set environment and potentially run startup command 
     setenv("WAYLAND_DISPLAY", socket, true);
     if (startup_cmd) {
         if (fork() == 0) {
@@ -1597,12 +1597,202 @@ setenv("WAYLAND_DISPLAY", wayland_display, 1);
         }
     }
 
-    /* Run Wayland event loop */
+    // Run Wayland event loop 
     wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s", socket);
     wl_display_run(server.wl_display);
 
-    /* Shutdown */
+    // Shutdown 
     wl_display_destroy_clients(server.wl_display);
     wl_display_destroy(server.wl_display);
+    return 0;
+}*/
+
+
+int main(int argc, char *argv[]) {
+    wlr_log_init(WLR_DEBUG, NULL);
+    char *startup_cmd = NULL;
+
+    int c;
+    while ((c = getopt(argc, argv, "s:h")) != -1) {
+        switch (c) {
+        case 's':
+            startup_cmd = optarg;
+            break;
+        default:
+            printf("Usage: %s [-s startup command]\n", argv[0]);
+            return 0;
+        }
+    }
+    if (optind < argc) {
+        printf("Usage: %s [-s startup command]\n", argv[0]);
+        return 0;
+    }
+
+    struct tinywl_server server = {0};
+
+    server.wl_display = wl_display_create();
+    if (!server.wl_display) {
+        wlr_log(WLR_ERROR, "Cannot create Wayland display");
+        return 1;
+    }
+
+    const char *backends_env = getenv("WLR_BACKENDS");
+    if (backends_env && strcmp(backends_env, "RDP") == 0) {
+        wlr_log(WLR_INFO, "Creating RDP backend");
+        server.backend = wlr_RDP_backend_create(server.wl_display);
+    } else {
+        server.backend = wlr_backend_autocreate(server.wl_display);
+    }
+    if (!server.backend) {
+        wlr_log(WLR_ERROR, "Failed to create backend");
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+
+    server.renderer = wlr_gles2_renderer_create_surfaceless();
+    if (!server.renderer) {
+        wlr_log(WLR_ERROR, "Failed to create renderer");
+        wlr_backend_destroy(server.backend);
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+    wlr_renderer_init_wl_display(server.renderer, server.wl_display);
+
+    server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
+    if (!server.allocator) {
+        wlr_log(WLR_ERROR, "Failed to create allocator");
+        wlr_renderer_destroy(server.renderer);
+        wlr_backend_destroy(server.backend);
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+
+    wlr_compositor_create(server.wl_display, server.renderer);
+    wlr_subcompositor_create(server.wl_display);
+    wlr_data_device_manager_create(server.wl_display);
+
+    server.output_layout = wlr_output_layout_create();
+    wl_list_init(&server.outputs);
+    server.new_output.notify = server_new_output;
+    wl_signal_add(&server.backend->events.new_output, &server.new_output);
+
+    server.scene = wlr_scene_create();
+    wlr_scene_attach_output_layout(server.scene, server.output_layout);
+
+    wl_list_init(&server.views);
+    server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
+    server.new_xdg_surface.notify = server_new_xdg_surface;
+    wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_surface);
+
+    server.cursor = wlr_cursor_create();
+    wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
+
+    server.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
+    wlr_xcursor_manager_load(server.cursor_mgr, 1);
+
+    server.cursor_mode = TINYWL_CURSOR_PASSTHROUGH;
+    server.cursor_motion.notify = server_cursor_motion;
+    wl_signal_add(&server.cursor->events.motion, &server.cursor_motion);
+    server.cursor_motion_absolute.notify = server_cursor_motion_absolute;
+    wl_signal_add(&server.cursor->events.motion_absolute, &server.cursor_motion_absolute);
+    server.cursor_button.notify = server_cursor_button;
+    wl_signal_add(&server.cursor->events.button, &server.cursor_button);
+    server.cursor_axis.notify = server_cursor_axis;
+    wl_signal_add(&server.cursor->events.axis, &server.cursor_axis);
+    server.cursor_frame.notify = server_cursor_frame;
+    wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
+
+    wl_list_init(&server.keyboards);
+    server.new_input.notify = server_new_input;
+    wl_signal_add(&server.backend->events.new_input, &server.new_input);
+    server.seat = wlr_seat_create(server.wl_display, "seat0");
+    server.request_cursor.notify = seat_request_cursor;
+    wl_signal_add(&server.seat->events.request_set_cursor, &server.request_cursor);
+    server.request_set_selection.notify = seat_request_set_selection;
+    wl_signal_add(&server.seat->events.request_set_selection, &server.request_set_selection);
+
+    const char *socket = wl_display_add_socket_auto(server.wl_display);
+    if (!socket) {
+        wlr_log(WLR_ERROR, "Unable to create wayland socket");
+        wlr_seat_destroy(server.seat);
+        wlr_xcursor_manager_destroy(server.cursor_mgr);
+        wlr_cursor_destroy(server.cursor);
+        wlr_output_layout_destroy(server.output_layout);
+        wlr_allocator_destroy(server.allocator);
+        wlr_renderer_destroy(server.renderer);
+        wlr_backend_destroy(server.backend);
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+
+    if (!wlr_backend_start(server.backend)) {
+        wlr_log(WLR_ERROR, "Failed to start backend");
+        wlr_seat_destroy(server.seat);
+        wlr_xcursor_manager_destroy(server.cursor_mgr);
+        wlr_cursor_destroy(server.cursor);
+        wlr_output_layout_destroy(server.output_layout);
+        wlr_allocator_destroy(server.allocator);
+        wlr_renderer_destroy(server.renderer);
+        wlr_backend_destroy(server.backend);
+        wl_display_destroy(server.wl_display);
+        return 1;
+    }
+
+    setenv("WAYLAND_DISPLAY", socket, true);
+    if (startup_cmd) {
+        if (fork() == 0) {
+            execl("/bin/sh", "/bin/sh", "-c", startup_cmd, (void *)NULL);
+        }
+    }
+
+   wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s", socket);
+    wl_display_run(server.wl_display);
+
+    /* Cleanup */
+    // Free views
+    struct tinywl_view *view, *view_tmp;
+    wl_list_for_each_safe(view, view_tmp, &server.views, link) {
+        wl_list_remove(&view->link); // Remove from list
+        // Ensure all listeners are removed to prevent double-free
+        wl_list_remove(&view->map.link);
+        wl_list_remove(&view->unmap.link);
+        wl_list_remove(&view->destroy.link);
+        wl_list_remove(&view->request_move.link);
+        wl_list_remove(&view->request_resize.link);
+        wl_list_remove(&view->request_maximize.link);
+        wl_list_remove(&view->request_fullscreen.link);
+        free(view);
+    }
+
+    // Free outputs
+    struct tinywl_output *output, *output_tmp;
+    wl_list_for_each_safe(output, output_tmp, &server.outputs, link) {
+        wlr_output_destroy(output->wlr_output); // Free output resources
+        wl_list_remove(&output->link);
+        wl_list_remove(&output->frame.link);
+        wl_list_remove(&output->destroy.link);
+        free(output);
+    }
+
+    // Free keyboards
+    struct tinywl_keyboard *kb, *kb_tmp;
+    wl_list_for_each_safe(kb, kb_tmp, &server.keyboards, link) {
+        wl_list_remove(&kb->link);
+        wl_list_remove(&kb->modifiers.link);
+        wl_list_remove(&kb->key.link);
+        wl_list_remove(&kb->destroy.link);
+        free(kb);
+    }
+
+    wlr_seat_destroy(server.seat);
+    wlr_xcursor_manager_destroy(server.cursor_mgr);
+    wlr_cursor_destroy(server.cursor);
+    wlr_output_layout_destroy(server.output_layout);
+    wlr_allocator_destroy(server.allocator);
+    wlr_renderer_destroy(server.renderer);
+    wlr_backend_destroy(server.backend);
+    wl_display_destroy_clients(server.wl_display);
+    wl_display_destroy(server.wl_display);
+
     return 0;
 }

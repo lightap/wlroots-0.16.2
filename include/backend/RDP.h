@@ -28,9 +28,27 @@ struct wlr_RDP_backend {
     struct wlr_renderer *renderer;    // Renderer for this backend
     freerdp_listener *listener;       // FreeRDP listener
 };*/
+/*
+struct wlr_RDP_backend {
+    struct wlr_backend backend;
+    struct wl_display *display;
+    struct wl_event_loop *event_loop;
+    bool started;
+    struct wl_list outputs;
+    struct wlr_renderer *renderer;
+    struct wlr_allocator *allocator;  // Add this line
+    // No renderer pointer needed anymore
+     // Add FreeRDP listener
+    freerdp_listener *listener;
+    freerdp_peer *rdp_peer;
+    struct wl_list peers;
+};*/
 
 struct wlr_RDP_backend {
     struct wlr_backend backend;
+   // struct wl_event_source *fd_event_source; // To track the event source
+    struct wl_event_source *fd_event_sources[32];
+    int fd_count; // Number of event sources
     struct wl_display *display;
     struct wl_event_loop *event_loop;
     bool started;

@@ -197,6 +197,7 @@ static void destroy_buffer(struct wlr_gles2_buffer *buffer) {
 
 	glDeleteFramebuffers(1, &buffer->fbo);
 	glDeleteRenderbuffers(1, &buffer->rbo);
+    glDeleteTextures(1, &buffer->texture); // Explicitly delete texture
 
 	pop_gles2_debug(buffer->renderer);
 
@@ -301,7 +302,7 @@ static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *rendere
 
     return buffer;
 }*/
-
+/*
 static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *renderer,
         struct wlr_buffer *wlr_buffer) {
     wlr_log(WLR_DEBUG, "Creating GLES2 buffer for %dx%d", 
@@ -404,7 +405,165 @@ static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *rendere
         buffer->link.next, buffer->link.prev);
 
     return buffer;
+}*/
+
+static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *renderer,
+        struct wlr_buffer *wlr_buffer) {
+    // Log entry for debugging
+    wlr_log(WLR_DEBUG, "Creating GLES2 buffer for %dx%d", 
+            wlr_buffer->width, wlr_buffer->height);
+
+    // Validate inputs
+    if (!renderer) {
+        wlr_log(WLR_ERROR, "Null renderer in create_buffer");
+        return NULL;
+    }
+    if (!wlr_buffer) {
+        wlr_log(WLR_ERROR, "Null wlr_buffer in create_buffer");
+        return NULL;
+    }
+
+    // Log initial buffer list state
+    wlr_log(WLR_DEBUG, "Initial buffer list state - head: %p, prev: %p, next: %p",
+            &renderer->buffers, renderer->buffers.prev, renderer->buffers.next);
+
+    // Allocate buffer structure
+    struct wlr_gles2_buffer *buffer = calloc(1, sizeof(*buffer));
+    if (!buffer) {
+        wlr_log(WLR_ERROR, "Failed to allocate wlr_gles2_buffer");
+        return NULL;
+    }
+
+    // Initialize basic fields
+    buffer->buffer = wlr_buffer;
+    buffer->renderer = renderer;
+    buffer->texture = 0;  // Initialize to 0 for safety
+    buffer->fbo = 0;
+    buffer->rbo = 0;
+    buffer->image = EGL_NO_IMAGE_KHR;
+
+    // Access buffer data
+    void *data_ptr;
+    uint32_t format;
+    size_t stride;
+    if (!wlr_buffer_begin_data_ptr_access(wlr_buffer, 
+            WLR_BUFFER_DATA_PTR_ACCESS_READ, 
+            &data_ptr, &format, &stride)) {
+        wlr_log(WLR_ERROR, "Failed to access buffer data");
+        free(buffer);
+        return NULL;
+    }
+
+    // Make EGL context current for OpenGL operations
+    struct wlr_egl_context prev_ctx;
+    wlr_egl_save_context(&prev_ctx);
+    if (!wlr_egl_make_current(renderer->egl)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current");
+        wlr_buffer_end_data_ptr_access(wlr_buffer);
+        free(buffer);
+        return NULL;
+    }
+
+    push_gles2_debug(renderer);
+
+    // Create and configure texture
+    glGenTextures(1, &buffer->texture);
+    if (buffer->texture == 0) {
+        wlr_log(WLR_ERROR, "Failed to generate texture");
+        goto error_cleanup;
+    }
+    glBindTexture(GL_TEXTURE_2D, buffer->texture);
+    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // Upload texture data (assuming XRGB8888 format; adjust if needed)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 
+                 wlr_buffer->width, wlr_buffer->height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, data_ptr);
+    GLenum tex_error = glGetError();
+    if (tex_error != GL_NO_ERROR) {
+        wlr_log(WLR_ERROR, "glTexImage2D failed with error: 0x%x", tex_error);
+        goto error_cleanup;
+    }
+
+    // Release buffer access
+    wlr_buffer_end_data_ptr_access(wlr_buffer);
+
+    // Create and setup framebuffer
+    glGenFramebuffers(1, &buffer->fbo);
+    if (buffer->fbo == 0) {
+        wlr_log(WLR_ERROR, "Failed to generate framebuffer");
+        goto error_cleanup;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                          GL_TEXTURE_2D, buffer->texture, 0);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Framebuffer incomplete, status: 0x%x", status);
+        goto error_cleanup;
+    }
+
+    // Unbind texture and framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    pop_gles2_debug(renderer);
+
+    // Initialize Wayland resources
+    wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer, &buffer_addon_impl);
+    wl_list_init(&buffer->link);
+
+    // Ensure buffer list is valid, reinitialize if corrupted
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_DEBUG, "Buffer list appears corrupted, reinitializing");
+        wl_list_init(&renderer->buffers);
+    }
+
+    // Insert buffer into renderer's list
+    wl_list_insert(&renderer->buffers, &buffer->link);
+    if (buffer->link.prev == NULL || buffer->link.next == NULL) {
+        wlr_log(WLR_ERROR, "Failed to insert buffer into renderer->buffers");
+        goto error_cleanup_list;
+    }
+
+    // Log final state
+    wlr_log(WLR_DEBUG, "Buffer created - texture: %u, fbo: %u, list: head next: %p, buffer prev: %p",
+            buffer->texture, buffer->fbo, renderer->buffers.next, buffer->link.prev);
+
+    // Restore previous EGL context
+    wlr_egl_restore_context(&prev_ctx);
+
+    return buffer;
+
+error_cleanup_list:
+    // Cleanup addon and list if insertion failed
+    wlr_addon_finish(&buffer->addon);
+    wl_list_remove(&buffer->link);
+
+error_cleanup:
+    // Cleanup OpenGL resources on error
+    push_gles2_debug(renderer);
+    if (buffer->fbo != 0) {
+        glDeleteFramebuffers(1, &buffer->fbo);
+    }
+    if (buffer->texture != 0) {
+        glDeleteTextures(1, &buffer->texture);
+    }
+    pop_gles2_debug(renderer);
+
+    // Restore EGL context and free buffer
+    wlr_egl_restore_context(&prev_ctx);
+    wlr_buffer_end_data_ptr_access(wlr_buffer);
+    free(buffer);
+
+    return NULL;
 }
+
 /*
 static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
 		struct wlr_buffer *wlr_buffer) {
@@ -1104,7 +1263,7 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
     wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl);
     return &renderer->wlr_renderer;
 }
-
+/*
 struct wlr_renderer *wlr_gles2_renderer_create_surfaceless(void) {
     wlr_log(WLR_INFO, "Attempting to create surfaceless GLES2 renderer");
     struct wlr_egl *egl = calloc(1, sizeof(struct wlr_egl));
@@ -1243,6 +1402,170 @@ struct wlr_renderer *wlr_gles2_renderer_create_surfaceless(void) {
     if (context == EGL_NO_CONTEXT) {
         error = eglGetError();
         wlr_log(WLR_ERROR, "Context creation failed. Error: 0x%x", error);
+        eglTerminate(display);
+        free(egl);
+        return NULL;
+    }
+
+    // Store in the EGL structure
+    egl->display = display;
+    egl->context = context;
+
+    struct wlr_gles2_renderer *renderer = calloc(1, sizeof(struct wlr_gles2_renderer));
+    if (!renderer) {
+        wlr_log(WLR_ERROR, "Failed to allocate renderer");
+        eglDestroyContext(display, context);
+        eglTerminate(display);
+        free(egl);
+        return NULL;
+    }
+
+    renderer->wlr_renderer.impl = &renderer_impl;
+    renderer->egl = egl;
+    renderer->drm_fd = -1;
+
+    // Check for Zink driver
+    const char *driver = getenv("MESA_LOADER_DRIVER_OVERRIDE");
+    if (driver && strcmp(driver, "zink") == 0) {
+        wlr_log(WLR_INFO, "Using Zink (Vulkan) driver for hardware acceleration");
+    }
+
+    wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl);
+
+    return &renderer->wlr_renderer;
+}*/
+
+struct wlr_renderer *wlr_gles2_renderer_create_surfaceless(void) {
+    wlr_log(WLR_INFO, "Attempting to create surfaceless GLES2 renderer");
+
+    // Allocate wlr_egl structure
+    struct wlr_egl *egl = calloc(1, sizeof(struct wlr_egl));
+    if (!egl) {
+        wlr_log(WLR_ERROR, "Failed to allocate EGL structure");
+        return NULL;
+    }
+
+    // Log system EGL information
+    const char *egl_vendor = eglQueryString(EGL_NO_DISPLAY, EGL_VENDOR);
+    const char *egl_version = eglQueryString(EGL_NO_DISPLAY, EGL_VERSION);
+    wlr_log(WLR_INFO, "EGL Vendor: %s", egl_vendor ? egl_vendor : "Unknown");
+    wlr_log(WLR_INFO, "EGL Version: %s", egl_version ? egl_version : "Unknown");
+
+    const char *extensions = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    wlr_log(WLR_INFO, "Client EGL Extensions: %s", extensions ? extensions : "NULL");
+
+    // Check for surfaceless support
+    bool has_surfaceless = strstr(extensions, "EGL_MESA_platform_surfaceless") != NULL;
+    bool has_platform_base = strstr(extensions, "EGL_EXT_platform_base") != NULL;
+    wlr_log(WLR_INFO, "Surfaceless platform support: %s", has_surfaceless ? "YES" : "NO");
+    wlr_log(WLR_INFO, "Platform base extension: %s", has_platform_base ? "YES" : "NO");
+
+    // Use platform display function if available
+    PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display = 
+        (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+
+    if (!get_platform_display) {
+        wlr_log(WLR_ERROR, "Platform display function not available");
+        free(egl);
+        return NULL;
+    }
+
+    // Try creating display with surfaceless platform
+    EGLDisplay display = get_platform_display(
+        EGL_PLATFORM_SURFACELESS_MESA, 
+        EGL_DEFAULT_DISPLAY, 
+        NULL
+    );
+
+    if (display == EGL_NO_DISPLAY) {
+        wlr_log(WLR_ERROR, "Failed to create surfaceless display");
+        free(egl);
+        return NULL;
+    }
+
+    // Initialize EGL
+    EGLint major, minor;
+    if (!eglInitialize(display, &major, &minor)) {
+        wlr_log(WLR_ERROR, "EGL initialization failed. Error: 0x%x", eglGetError());
+        eglTerminate(display);
+        free(egl);
+        return NULL;
+    }
+    wlr_log(WLR_INFO, "EGL initialized, version: %d.%d", major, minor);
+
+    // Diagnostic: Get number of EGL configurations
+    EGLint num_config_total = 0;
+    eglGetConfigs(display, NULL, 0, &num_config_total);
+    wlr_log(WLR_INFO, "Available EGL configurations: %d", num_config_total);
+
+    // Multiple configuration attempts
+    const EGLint config_attempts[][20] = {
+        {
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT | EGL_WINDOW_BIT | EGL_PIXMAP_BIT,
+            EGL_RED_SIZE, 1,
+            EGL_GREEN_SIZE, 1,
+            EGL_BLUE_SIZE, 1,
+            EGL_ALPHA_SIZE, EGL_DONT_CARE,
+            EGL_DEPTH_SIZE, EGL_DONT_CARE,
+            EGL_STENCIL_SIZE, EGL_DONT_CARE,
+            EGL_NONE
+        },
+        {
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+            EGL_RED_SIZE, 1,
+            EGL_GREEN_SIZE, 1,
+            EGL_BLUE_SIZE, 1,
+            EGL_NONE
+        }
+    };
+
+    EGLConfig config = NULL;
+    EGLint num_config = 0;
+
+    // Try different configurations
+    for (size_t i = 0; i < sizeof(config_attempts) / sizeof(config_attempts[0]); i++) {
+        wlr_log(WLR_INFO, "Attempting EGL configuration attempt %zu", i);
+        
+        if (eglChooseConfig(display, config_attempts[i], &config, 1, &num_config)) {
+            if (num_config > 0) {
+                wlr_log(WLR_INFO, "Successfully found EGL configuration");
+                break;
+            }
+        } else {
+            wlr_log(WLR_ERROR, "EGL config selection failed. Error code: 0x%x", eglGetError());
+        }
+    }
+
+    if (num_config == 0) {
+        wlr_log(WLR_ERROR, "No matching EGL configurations found after multiple attempts");
+        eglTerminate(display);
+        free(egl);
+        return NULL;
+    }
+
+    // Detailed configuration diagnostics
+    EGLint red_size, green_size, blue_size, alpha_size;
+    eglGetConfigAttrib(display, config, EGL_RED_SIZE, &red_size);
+    eglGetConfigAttrib(display, config, EGL_GREEN_SIZE, &green_size);
+    eglGetConfigAttrib(display, config, EGL_BLUE_SIZE, &blue_size);
+    eglGetConfigAttrib(display, config, EGL_ALPHA_SIZE, &alpha_size);
+    wlr_log(WLR_INFO, "Selected EGL Config Details:");
+    wlr_log(WLR_INFO, "  Red Size: %d", red_size);
+    wlr_log(WLR_INFO, "  Green Size: %d", green_size);
+    wlr_log(WLR_INFO, "  Blue Size: %d", blue_size);
+    wlr_log(WLR_INFO, "  Alpha Size: %d", alpha_size);
+
+    // Context creation
+    EGLint ctx_attribs[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 2,
+        EGL_NONE
+    };
+
+    EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, ctx_attribs);
+    if (context == EGL_NO_CONTEXT) {
+        wlr_log(WLR_ERROR, "Context creation failed. Error: 0x%x", eglGetError());
         eglTerminate(display);
         free(egl);
         return NULL;
