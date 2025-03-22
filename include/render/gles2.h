@@ -91,6 +91,8 @@ struct wlr_gles2_buffer {
 	struct wlr_addon addon;
 	  // Add new field for texture
     GLuint texture;  // New field for texture handle
+    bool destroyed; // New flag to track destruction
+    bool in_destruction;
 };
 
 struct wlr_gles2_texture {

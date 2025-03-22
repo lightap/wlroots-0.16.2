@@ -184,7 +184,7 @@ static struct wlr_gles2_renderer *gles2_get_renderer_in_context(
 	assert(renderer->current_buffer != NULL);
 	return renderer;
 }
-
+/*
 static void destroy_buffer(struct wlr_gles2_buffer *buffer) {
 	wl_list_remove(&buffer->link);
 	wlr_addon_finish(&buffer->addon);
@@ -206,6 +206,95 @@ static void destroy_buffer(struct wlr_gles2_buffer *buffer) {
 	wlr_egl_restore_context(&prev_ctx);
 
 	free(buffer);
+}*/
+
+static void destroy_buffer(struct wlr_gles2_buffer *buffer) {
+    // Extra validation
+    if (!buffer) {
+        wlr_log(WLR_ERROR, "Attempt to destroy NULL buffer");
+        return;
+    }
+    
+    if (buffer->destroyed) {
+        wlr_log(WLR_ERROR, "Attempt to destroy already destroyed buffer %p", buffer);
+        return;
+    }
+    
+    printf("[DEBUG] Starting destruction of buffer %p (texture: %u, fbo: %u)\n", 
+           buffer, buffer->texture, buffer->fbo);
+    fflush(stdout);
+    
+    // Set destroyed flag first thing
+    buffer->destroyed = true;
+    
+    // Don't try to remove from list if pointers are NULL
+    if (buffer->link.next != NULL && buffer->link.prev != NULL) {
+        // The list structure is valid, so just remove it
+        // No need to check if it's in the list - wl_list_remove handles this
+        wl_list_remove(&buffer->link);
+    } else {
+        printf("[DEBUG] Buffer %p not in a list or has invalid link\n", buffer);
+    }
+    
+    // Finish addon if initialized
+    wlr_addon_finish(&buffer->addon);
+    
+    // Check if renderer is valid before EGL operations
+    if (!buffer->renderer || !buffer->renderer->egl) {
+        printf("[DEBUG] Invalid renderer for buffer %p\n", buffer);
+        fflush(stdout);
+        free(buffer);  // Free memory even if renderer is invalid
+        return;
+    }
+    
+    // Save previous EGL context
+    struct wlr_egl_context prev_ctx;
+    wlr_egl_save_context(&prev_ctx);
+    
+    // Make renderer's EGL context current
+    if (!wlr_egl_make_current(buffer->renderer->egl)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current in destroy_buffer");
+        wlr_egl_restore_context(&prev_ctx);
+        free(buffer);
+        return;
+    }
+    
+    // Delete OpenGL resources with proper validation
+    push_gles2_debug(buffer->renderer);
+    
+    if (buffer->fbo && glIsFramebuffer(buffer->fbo)) {
+        glDeleteFramebuffers(1, &buffer->fbo);
+    }
+    
+    if (buffer->rbo && glIsRenderbuffer(buffer->rbo)) {
+        glDeleteRenderbuffers(1, &buffer->rbo);
+    }
+    
+    if (buffer->texture && glIsTexture(buffer->texture)) {
+        glDeleteTextures(1, &buffer->texture);
+    }
+    
+    pop_gles2_debug(buffer->renderer);
+    
+    // Clean up EGL image if it exists
+    if (buffer->image) {
+        wlr_egl_destroy_image(buffer->renderer->egl, buffer->image);
+    }
+    
+    // Restore previous context
+    wlr_egl_restore_context(&prev_ctx);
+    
+    // Zero out pointers before freeing
+    buffer->buffer = NULL;
+    buffer->renderer = NULL;
+    buffer->image = NULL;
+    
+    // Log completion and free memory
+    printf("[DEBUG] Successfully destroyed buffer %p\n", buffer);
+    fflush(stdout);
+    
+    // Free memory
+    free(buffer);
 }
 
 static void handle_buffer_destroy(struct wlr_addon *addon) {
@@ -406,7 +495,7 @@ static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *rendere
 
     return buffer;
 }*/
-
+/*//working
 static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *renderer,
         struct wlr_buffer *wlr_buffer) {
     // Log entry for debugging
@@ -562,50 +651,185 @@ error_cleanup:
     free(buffer);
 
     return NULL;
-}
-
-/*
-static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
-		struct wlr_buffer *wlr_buffer) {
-	struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
-
-	if (renderer->current_buffer != NULL) {
-		assert(wlr_egl_is_current(renderer->egl));
-
-		push_gles2_debug(renderer);
-		glFlush();
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		pop_gles2_debug(renderer);
-
-		wlr_buffer_unlock(renderer->current_buffer->buffer);
-		renderer->current_buffer = NULL;
-	}
-
-	if (wlr_buffer == NULL) {
-		wlr_egl_unset_current(renderer->egl);
-		return true;
-	}
-
-	wlr_egl_make_current(renderer->egl);
-
-	struct wlr_gles2_buffer *buffer = get_buffer(renderer, wlr_buffer);
-	if (buffer == NULL) {
-		buffer = create_buffer(renderer, wlr_buffer);
-	}
-	if (buffer == NULL) {
-		return false;
-	}
-
-	wlr_buffer_lock(wlr_buffer);
-	renderer->current_buffer = buffer;
-
-	push_gles2_debug(renderer);
-	glBindFramebuffer(GL_FRAMEBUFFER, renderer->current_buffer->fbo);
-	pop_gles2_debug(renderer);
-
-	return true;
 }*/
 
+static struct wlr_gles2_buffer *create_buffer(struct wlr_gles2_renderer *renderer,
+        struct wlr_buffer *wlr_buffer) {
+    printf("[DEBUG] Entering create_buffer for buffer %p\n", wlr_buffer);
+    fflush(stdout);
+
+    printf("[DEBUG] Step 1: Validating inputs\n");
+    fflush(stdout);
+    if (!renderer) {
+        wlr_log(WLR_ERROR, "Null renderer in create_buffer");
+        return NULL;
+    }
+    if (!wlr_buffer) {
+        wlr_log(WLR_ERROR, "Null wlr_buffer in create_buffer");
+        return NULL;
+    }
+    if (!renderer->egl) {
+        wlr_log(WLR_ERROR, "Null EGL context in renderer");
+        return NULL;
+    }
+
+    printf("[DEBUG] Buffer dimensions: %dx%d\n", wlr_buffer->width, wlr_buffer->height);
+    fflush(stdout);
+    printf("[DEBUG] Initial buffer list state - head: %p, prev: %p, next: %p\n",
+            &renderer->buffers, renderer->buffers.prev, renderer->buffers.next);
+    fflush(stdout);
+
+    printf("[DEBUG] Step 2: Allocating buffer structure\n");
+    fflush(stdout);
+    struct wlr_gles2_buffer *buffer = calloc(1, sizeof(*buffer));
+    if (!buffer) {
+        wlr_log(WLR_ERROR, "Failed to allocate wlr_gles2_buffer");
+        return NULL;
+    }
+
+    printf("[DEBUG] Step 3: Initializing buffer fields\n");
+    fflush(stdout);
+    buffer->buffer = wlr_buffer;
+    buffer->renderer = renderer;
+    buffer->texture = 0;
+    buffer->fbo = 0;
+    buffer->rbo = 0;
+    buffer->image = EGL_NO_IMAGE_KHR;
+
+    printf("[DEBUG] Step 4: Accessing buffer data\n");
+    fflush(stdout);
+    void *data_ptr;
+    uint32_t format;
+    size_t stride;
+    if (!wlr_buffer_begin_data_ptr_access(wlr_buffer, WLR_BUFFER_DATA_PTR_ACCESS_READ, 
+            &data_ptr, &format, &stride)) {
+        wlr_log(WLR_ERROR, "Failed to access buffer data");
+        free(buffer);
+        return NULL;
+    }
+
+    printf("[DEBUG] Step 5: Saving EGL context\n");
+    fflush(stdout);
+    struct wlr_egl_context prev_ctx;
+    wlr_egl_save_context(&prev_ctx);
+
+    printf("[DEBUG] Step 6: Making EGL context current, egl: %p\n", renderer->egl);
+    fflush(stdout);
+    if (!wlr_egl_make_current(renderer->egl)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current");
+        wlr_buffer_end_data_ptr_access(wlr_buffer);
+        free(buffer);
+        return NULL;
+    }
+
+    printf("[DEBUG] Step 7: Pushing GLES2 debug\n");
+    fflush(stdout);
+    push_gles2_debug(renderer);
+
+    printf("[DEBUG] Step 8: Generating texture\n");
+    fflush(stdout);
+    glGenTextures(1, &buffer->texture);
+    if (buffer->texture == 0) {
+        wlr_log(WLR_ERROR, "Failed to generate texture");
+        goto error_cleanup;
+    }
+
+    printf("[DEBUG] Step 9: Binding and configuring texture\n");
+    fflush(stdout);
+    glBindTexture(GL_TEXTURE_2D, buffer->texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    printf("[DEBUG] Step 10: Uploading texture data\n");
+    fflush(stdout);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, wlr_buffer->width, wlr_buffer->height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, data_ptr);
+    GLenum tex_error = glGetError();
+    if (tex_error != GL_NO_ERROR) {
+        wlr_log(WLR_ERROR, "glTexImage2D failed with error: 0x%x", tex_error);
+        goto error_cleanup;
+    }
+
+    printf("[DEBUG] Step 11: Ending buffer data access\n");
+    fflush(stdout);
+    wlr_buffer_end_data_ptr_access(wlr_buffer);
+
+    printf("[DEBUG] Step 12: Generating framebuffer\n");
+    fflush(stdout);
+    glGenFramebuffers(1, &buffer->fbo);
+    if (buffer->fbo == 0) {
+        wlr_log(WLR_ERROR, "Failed to generate framebuffer");
+        goto error_cleanup;
+    }
+
+    printf("[DEBUG] Step 13: Binding and setting up framebuffer\n");
+    fflush(stdout);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buffer->texture, 0);
+
+    printf("[DEBUG] Step 14: Checking framebuffer status\n");
+    fflush(stdout);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Framebuffer incomplete, status: 0x%x", status);
+        goto error_cleanup;
+    }
+
+    printf("[DEBUG] Step 15: Unbinding framebuffer and texture\n");
+    fflush(stdout);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    pop_gles2_debug(renderer);
+
+    printf("[DEBUG] Step 16: Initializing Wayland resources\n");
+    fflush(stdout);
+    wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer, &buffer_addon_impl);
+    wl_list_init(&buffer->link);
+
+    printf("[DEBUG] Step 17: Checking and fixing buffer list\n");
+    fflush(stdout);
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_DEBUG, "Buffer list appears corrupted, reinitializing");
+        wl_list_init(&renderer->buffers);
+    }
+
+    printf("[DEBUG] Step 18: Inserting buffer into list\n");
+    fflush(stdout);
+    wl_list_insert(&renderer->buffers, &buffer->link);
+    if (buffer->link.prev == NULL || buffer->link.next == NULL) {
+        wlr_log(WLR_ERROR, "Failed to insert buffer into renderer->buffers");
+        goto error_cleanup_list;
+    }
+
+    printf("[DEBUG] Buffer created - texture: %u, fbo: %u\n", buffer->texture, buffer->fbo);
+    fflush(stdout);
+    wlr_egl_restore_context(&prev_ctx);
+    return buffer;
+
+error_cleanup_list:
+    printf("[DEBUG] Cleanup: Finishing addon and removing from list\n");
+    fflush(stdout);
+    wlr_addon_finish(&buffer->addon);
+    wl_list_remove(&buffer->link);
+
+error_cleanup:
+    printf("[DEBUG] Cleanup: Deleting GL resources\n");
+    fflush(stdout);
+    push_gles2_debug(renderer);
+    if (buffer->fbo != 0) glDeleteFramebuffers(1, &buffer->fbo);
+    if (buffer->texture != 0) glDeleteTextures(1, &buffer->texture);
+    pop_gles2_debug(renderer);
+
+    printf("[DEBUG] Cleanup: Restoring EGL context and freeing buffer\n");
+    fflush(stdout);
+    wlr_egl_restore_context(&prev_ctx);
+    wlr_buffer_end_data_ptr_access(wlr_buffer);
+    free(buffer);
+    return NULL;
+}
+/*
 static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
         struct wlr_buffer *wlr_buffer) {
     struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
@@ -673,7 +897,747 @@ static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
 
     wlr_log(WLR_DEBUG, "  Successfully bound buffer");
     return true;
+}*/
+//work but only once to get rid of memory ussuage
+static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
+        struct wlr_buffer *wlr_buffer) {
+    struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
+    printf("[DEBUG] Entering gles2_bind_buffer - renderer: %p, wlr_buffer: %p, current_buffer: %p\n",
+           renderer, wlr_buffer, renderer->current_buffer);
+    fflush(stdout);
+
+    printf("[DEBUG] Step 1: Checking current buffer\n");
+    fflush(stdout);
+    if (renderer->current_buffer != NULL) {
+        printf("[DEBUG] Unbinding current buffer %p\n", renderer->current_buffer);
+        fflush(stdout);
+        assert(wlr_egl_is_current(renderer->egl));
+
+        push_gles2_debug(renderer);
+        glFlush();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        pop_gles2_debug(renderer);
+
+        wlr_buffer_unlock(renderer->current_buffer->buffer);
+        renderer->current_buffer = NULL;
+    }
+
+    printf("[DEBUG] Step 2: Handling null buffer\n");
+    fflush(stdout);
+    if (wlr_buffer == NULL) {
+        wlr_egl_unset_current(renderer->egl);
+        printf("[DEBUG] Null buffer, EGL context unset\n");
+        fflush(stdout);
+        return true;
+    }
+
+    printf("[DEBUG] Step 3: Making EGL context current\n");
+    fflush(stdout);
+    if (!wlr_egl_make_current(renderer->egl)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current in gles2_bind_buffer");
+        return false;
+    }
+
+    printf("[DEBUG] Step 4: Checking buffer list validity\n");
+    fflush(stdout);
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_DEBUG, "Buffer list invalid, reinitializing");
+        wl_list_init(&renderer->buffers);
+    }
+
+    printf("[DEBUG] Step 5: Managing buffer count\n");
+    fflush(stdout);
+    int buffer_count = wl_list_length(&renderer->buffers);
+    const int MAX_BUFFERS = 1000;
+    printf("[DEBUG] Current buffer count: %d\n", buffer_count);
+    fflush(stdout);
+
+    // Reset all buffers when hitting 1000
+    if (buffer_count >= MAX_BUFFERS) {
+        printf("[DEBUG] Buffer limit (%d) reached, resetting all buffers\n", MAX_BUFFERS);
+        fflush(stdout);
+        struct wlr_gles2_buffer *buffer, *tmp;
+        wl_list_for_each_safe(buffer, tmp, &renderer->buffers, link) {
+            destroy_buffer(buffer);
+        }
+        wl_list_init(&renderer->buffers); // Reinitialize list
+        wlr_log(WLR_DEBUG, "All buffers reset, memory cleared");
+    }
+
+    printf("[DEBUG] Step 6: Getting or creating buffer\n");
+    fflush(stdout);
+    struct wlr_gles2_buffer *buffer = get_buffer(renderer, wlr_buffer);
+    if (buffer == NULL) {
+        printf("[DEBUG] No existing buffer, creating new one\n");
+        fflush(stdout);
+        buffer = create_buffer(renderer, wlr_buffer);
+        if (buffer == NULL) {
+            wlr_log(WLR_ERROR, "Failed to create buffer in gles2_bind_buffer");
+            return false;
+        }
+    }
+
+    printf("[DEBUG] Step 7: Locking and binding buffer - buffer: %p, fbo: %u\n",
+           buffer, buffer->fbo);
+    fflush(stdout);
+    if (!buffer || buffer->fbo == 0) {
+        wlr_log(WLR_ERROR, "Invalid buffer or FBO in gles2_bind_buffer");
+        return false;
+    }
+    wlr_buffer_lock(wlr_buffer);
+    renderer->current_buffer = buffer;
+
+    push_gles2_debug(renderer);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Framebuffer incomplete in gles2_bind_buffer: 0x%x", status);
+        wlr_buffer_unlock(wlr_buffer);
+        renderer->current_buffer = NULL;
+        pop_gles2_debug(renderer);
+        return false;
+    }
+    pop_gles2_debug(renderer);
+
+    printf("[DEBUG] gles2_bind_buffer completed successfully\n");
+    fflush(stdout);
+    return true;
 }
+/*
+static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
+        struct wlr_buffer *wlr_buffer) {
+    struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
+    printf("[DEBUG] Entering gles2_bind_buffer - renderer: %p, wlr_buffer: %p, current_buffer: %p\n",
+           renderer, wlr_buffer, renderer->current_buffer);
+    fflush(stdout);
+
+    printf("[DEBUG] Step 1: Checking current buffer\n");
+    fflush(stdout);
+    if (renderer->current_buffer != NULL) {
+        printf("[DEBUG] Unbinding current buffer %p\n", renderer->current_buffer);
+        fflush(stdout);
+        assert(wlr_egl_is_current(renderer->egl));
+
+        push_gles2_debug(renderer);
+        glFlush();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        pop_gles2_debug(renderer);
+
+        wlr_buffer_unlock(renderer->current_buffer->buffer);
+        renderer->current_buffer = NULL;
+    }
+
+    printf("[DEBUG] Step 2: Handling null buffer\n");
+    fflush(stdout);
+    if (wlr_buffer == NULL) {
+        wlr_egl_unset_current(renderer->egl);
+        printf("[DEBUG] Null buffer, EGL context unset\n");
+        fflush(stdout);
+        return true;
+    }
+
+    printf("[DEBUG] Step 3: Making EGL context current\n");
+    fflush(stdout);
+    if (!wlr_egl_make_current(renderer->egl)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current in gles2_bind_buffer");
+        return false;
+    }
+
+    printf("[DEBUG] Step 4: Checking buffer list validity\n");
+    fflush(stdout);
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_DEBUG, "Buffer list invalid, reinitializing");
+        wl_list_init(&renderer->buffers);
+    }
+
+    printf("[DEBUG] Step 5: Managing buffer count\n");
+    fflush(stdout);
+    int buffer_count = wl_list_length(&renderer->buffers);
+    printf("[DEBUG] Current buffer count: %d\n", buffer_count);
+    fflush(stdout);
+
+    // Texture-based reset tracking
+    static GLuint last_texture = 0; // Track the last created texture ID
+    const int TEXTURE_RESET_INTERVAL = 100;
+
+    printf("[DEBUG] Step 6: Getting or creating buffer\n");
+    fflush(stdout);
+    struct wlr_gles2_buffer *buffer = get_buffer(renderer, wlr_buffer);
+    if (buffer == NULL) {
+        printf("[DEBUG] No existing buffer, creating new one\n");
+        fflush(stdout);
+        buffer = create_buffer(renderer, wlr_buffer);
+        if (buffer == NULL) {
+            wlr_log(WLR_ERROR, "Failed to create buffer in gles2_bind_buffer");
+            return false;
+        }
+        printf("[DEBUG] New buffer created - buffer: %p, texture: %u, count after: %d\n",
+                buffer, buffer->texture, wl_list_length(&renderer->buffers));
+        fflush(stdout);
+
+        // Reset if we've crossed a 100-texture boundary
+        if (buffer->texture > last_texture) {
+            GLuint current_base = (buffer->texture / TEXTURE_RESET_INTERVAL) * TEXTURE_RESET_INTERVAL;
+            GLuint last_base = (last_texture / TEXTURE_RESET_INTERVAL) * TEXTURE_RESET_INTERVAL;
+            if (current_base > last_base) {
+                printf("[DEBUG] Texture %u crossed boundary (last: %u), resetting all buffers\n",
+                        buffer->texture, last_texture);
+                fflush(stdout);
+
+                struct wlr_gles2_buffer *old_buffer, *tmp;
+                wl_list_for_each_safe(old_buffer, tmp, &renderer->buffers, link) {
+                    if (old_buffer != buffer) {
+                        printf("[DEBUG] Destroying buffer %p (texture: %u) during reset\n",
+                                old_buffer, old_buffer->texture);
+                        fflush(stdout);
+                        // Only unlock if still locked to avoid double-unlock
+                        if (old_buffer->buffer->lock_count > 0) {
+                            wlr_buffer_unlock(old_buffer->buffer);
+                            printf("[DEBUG] Unlocked wlr_buffer %p for buffer %p\n",
+                                    old_buffer->buffer, old_buffer);
+                            fflush(stdout);
+                        }
+                        wl_list_remove(&old_buffer->link);
+                        destroy_buffer(old_buffer);
+                    }
+                }
+
+                wl_list_init(&renderer->buffers);
+                wl_list_insert(&renderer->buffers, &buffer->link);
+                printf("[DEBUG] Reset complete at texture %u, count: %d\n",
+                        buffer->texture, wl_list_length(&renderer->buffers));
+                fflush(stdout);
+                wlr_log(WLR_DEBUG, "All buffers reset at texture %u, memory cleared", buffer->texture);
+            }
+            last_texture = buffer->texture; // Update last texture ID
+        }
+    } else {
+        printf("[DEBUG] Using existing buffer %p, texture: %u, count: %d\n",
+                buffer, buffer->texture, wl_list_length(&renderer->buffers));
+        fflush(stdout);
+    }
+
+    printf("[DEBUG] Step 7: Locking and binding buffer - buffer: %p, fbo: %u\n",
+           buffer, buffer->fbo);
+    fflush(stdout);
+    if (!buffer || buffer->fbo == 0) {
+        wlr_log(WLR_ERROR, "Invalid buffer or FBO in gles2_bind_buffer");
+        return false;
+    }
+    wlr_buffer_lock(wlr_buffer);
+    renderer->current_buffer = buffer;
+
+    push_gles2_debug(renderer);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Framebuffer incomplete in gles2_bind_buffer: 0x%x", status);
+        wlr_buffer_unlock(wlr_buffer);
+        renderer->current_buffer = NULL;
+        pop_gles2_debug(renderer);
+        return false;
+    }
+    pop_gles2_debug(renderer);
+
+    printf("[DEBUG] gles2_bind_buffer completed successfully\n");
+    fflush(stdout);
+    return true;
+}*/
+/*
+static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
+        struct wlr_buffer *wlr_buffer) {
+    struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
+    printf("[DEBUG] Entering gles2_bind_buffer - renderer: %p, wlr_buffer: %p, current_buffer: %p\n",
+           renderer, wlr_buffer, renderer->current_buffer);
+    fflush(stdout);
+
+    printf("[DEBUG] Step 1: Checking current buffer\n");
+    fflush(stdout);
+    if (renderer->current_buffer != NULL) {
+        printf("[DEBUG] Unbinding current buffer %p\n", renderer->current_buffer);
+        fflush(stdout);
+        assert(wlr_egl_is_current(renderer->egl));
+
+        push_gles2_debug(renderer);
+        glFlush();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        pop_gles2_debug(renderer);
+
+        wlr_buffer_unlock(renderer->current_buffer->buffer);
+        renderer->current_buffer = NULL;
+    }
+
+    printf("[DEBUG] Step 2: Handling null buffer\n");
+    fflush(stdout);
+    if (wlr_buffer == NULL) {
+        wlr_egl_unset_current(renderer->egl);
+        printf("[DEBUG] Null buffer, EGL context unset\n");
+        fflush(stdout);
+        return true;
+    }
+
+    printf("[DEBUG] Step 3: Making EGL context current\n");
+    fflush(stdout);
+    if (!wlr_egl_make_current(renderer->egl)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current in gles2_bind_buffer");
+        return false;
+    }
+
+    printf("[DEBUG] Step 4: Checking buffer list validity\n");
+    fflush(stdout);
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_DEBUG, "Buffer list invalid, reinitializing");
+        wl_list_init(&renderer->buffers);
+    }
+
+    printf("[DEBUG] Step 5: Managing buffer count\n");
+    fflush(stdout);
+    int buffer_count = wl_list_length(&renderer->buffers);
+    printf("[DEBUG] Current buffer count: %d\n", buffer_count);
+    fflush(stdout);
+
+    // Texture-based reset tracking
+    static GLuint last_texture = 0; // Track the last created texture ID
+    const int TEXTURE_RESET_INTERVAL = 100;
+
+    printf("[DEBUG] Step 6: Getting or creating buffer\n");
+    fflush(stdout);
+    struct wlr_gles2_buffer *buffer = get_buffer(renderer, wlr_buffer);
+    if (buffer == NULL) {
+        printf("[DEBUG] No existing buffer, creating new one\n");
+        fflush(stdout);
+        buffer = create_buffer(renderer, wlr_buffer);
+        if (buffer == NULL) {
+            wlr_log(WLR_ERROR, "Failed to create buffer in gles2_bind_buffer");
+            return false;
+        }
+        printf("[DEBUG] New buffer created - buffer: %p, texture: %u, count after: %d\n",
+                buffer, buffer->texture, wl_list_length(&renderer->buffers));
+        fflush(stdout);
+
+        // Reset if we've crossed a 100-texture boundary
+        if (buffer->texture > last_texture) {
+            GLuint current_base = (buffer->texture / TEXTURE_RESET_INTERVAL) * TEXTURE_RESET_INTERVAL;
+            GLuint last_base = (last_texture / TEXTURE_RESET_INTERVAL) * TEXTURE_RESET_INTERVAL;
+            if (current_base > last_base) {
+                printf("[DEBUG] Texture %u crossed boundary (last: %u), resetting all buffers\n",
+                        buffer->texture, last_texture);
+                fflush(stdout);
+
+                // Move buffers to a temporary list for safe destruction
+                struct wl_list temp_list;
+                wl_list_init(&temp_list);
+                struct wlr_gles2_buffer *old_buffer, *tmp;
+                wl_list_for_each_safe(old_buffer, tmp, &renderer->buffers, link) {
+                    if (old_buffer != buffer) {
+                        printf("[DEBUG] Moving buffer %p (texture: %u) to temp list\n",
+                                old_buffer, old_buffer->texture);
+                        fflush(stdout);
+                        wl_list_remove(&old_buffer->link);
+                        wl_list_insert(&temp_list, &old_buffer->link);
+                    }
+                }
+
+                // Destroy buffers from the temporary list
+                wl_list_for_each_safe(old_buffer, tmp, &temp_list, link) {
+                    printf("[DEBUG] Destroying buffer %p (texture: %u)\n",
+                            old_buffer, old_buffer->texture);
+                    fflush(stdout);
+                    wl_list_remove(&old_buffer->link);
+                    wlr_buffer_unlock(old_buffer->buffer); // Unlock safely
+                    destroy_buffer(old_buffer);
+                    printf("[DEBUG] Destroyed buffer %p (texture: %u)\n",
+                            old_buffer, old_buffer->texture);
+                    fflush(stdout);
+                }
+
+                wl_list_init(&renderer->buffers);
+                wl_list_insert(&renderer->buffers, &buffer->link);
+                printf("[DEBUG] Reset complete at texture %u, count: %d\n",
+                        buffer->texture, wl_list_length(&renderer->buffers));
+                fflush(stdout);
+                wlr_log(WLR_DEBUG, "All buffers reset at texture %u, memory cleared", buffer->texture);
+            }
+            last_texture = buffer->texture; // Update last texture ID
+        }
+    } else {
+        printf("[DEBUG] Using existing buffer %p, texture: %u, count: %d\n",
+                buffer, buffer->texture, wl_list_length(&renderer->buffers));
+        fflush(stdout);
+    }
+
+    printf("[DEBUG] Step 7: Locking and binding buffer - buffer: %p, fbo: %u\n",
+           buffer, buffer->fbo);
+    fflush(stdout);
+    if (!buffer || buffer->fbo == 0) {
+        wlr_log(WLR_ERROR, "Invalid buffer or FBO in gles2_bind_buffer");
+        return false;
+    }
+    wlr_buffer_lock(wlr_buffer);
+    renderer->current_buffer = buffer;
+
+    push_gles2_debug(renderer);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Framebuffer incomplete in gles2_bind_buffer: 0x%x", status);
+        wlr_buffer_unlock(wlr_buffer);
+        renderer->current_buffer = NULL;
+        pop_gles2_debug(renderer);
+        return false;
+    }
+    pop_gles2_debug(renderer);
+
+    printf("[DEBUG] gles2_bind_buffer completed successfully\n");
+    fflush(stdout);
+    return true;
+}*/
+/*
+static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
+        struct wlr_buffer *wlr_buffer) {
+    struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
+    printf("[DEBUG] Entering gles2_bind_buffer - renderer: %p, wlr_buffer: %p, current_buffer: %p\n",
+           renderer, wlr_buffer, renderer->current_buffer);
+    fflush(stdout);
+
+    printf("[DEBUG] Step 1: Checking current buffer\n");
+    fflush(stdout);
+    if (renderer->current_buffer != NULL) {
+        printf("[DEBUG] Unbinding current buffer %p\n", renderer->current_buffer);
+        fflush(stdout);
+        assert(wlr_egl_is_current(renderer->egl));
+
+        push_gles2_debug(renderer);
+        glFlush();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        pop_gles2_debug(renderer);
+
+        wlr_buffer_unlock(renderer->current_buffer->buffer);
+        renderer->current_buffer = NULL;
+    }
+
+    printf("[DEBUG] Step 2: Handling null buffer\n");
+    fflush(stdout);
+    if (wlr_buffer == NULL) {
+        wlr_egl_unset_current(renderer->egl);
+        printf("[DEBUG] Null buffer, EGL context unset\n");
+        fflush(stdout);
+        return true;
+    }
+
+    printf("[DEBUG] Step 3: Making EGL context current\n");
+    fflush(stdout);
+    if (!wlr_egl_make_current(renderer->egl)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current in gles2_bind_buffer");
+        return false;
+    }
+
+    printf("[DEBUG] Step 4: Checking buffer list validity\n");
+    fflush(stdout);
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_DEBUG, "Buffer list invalid, reinitializing");
+        wl_list_init(&renderer->buffers);
+    }
+
+    printf("[DEBUG] Step 5: Managing buffer count\n");
+    fflush(stdout);
+    int buffer_count = wl_list_length(&renderer->buffers);
+    printf("[DEBUG] Current buffer count: %d\n", buffer_count);
+    fflush(stdout);
+
+    // Texture-based reset tracking
+    static GLuint last_texture = 0; // Track the last created texture ID
+    const int TEXTURE_RESET_INTERVAL = 5;
+
+    printf("[DEBUG] Step 6: Getting or creating buffer\n");
+    fflush(stdout);
+    struct wlr_gles2_buffer *buffer = get_buffer(renderer, wlr_buffer);
+    if (buffer == NULL) {
+        printf("[DEBUG] No existing buffer, creating new one\n");
+        fflush(stdout);
+        buffer = create_buffer(renderer, wlr_buffer);
+        if (buffer == NULL) {
+            wlr_log(WLR_ERROR, "Failed to create buffer in gles2_bind_buffer");
+            return false;
+        }
+        buffer->destroyed = false; // Initialize destroyed flag
+        printf("[DEBUG] New buffer created - buffer: %p, texture: %u, count after: %d\n",
+                buffer, buffer->texture, wl_list_length(&renderer->buffers));
+        fflush(stdout);
+
+        // Reset if we've crossed a 100-texture boundary
+        if (buffer->texture > last_texture) {
+            GLuint current_base = (buffer->texture / TEXTURE_RESET_INTERVAL) * TEXTURE_RESET_INTERVAL;
+            GLuint last_base = (last_texture / TEXTURE_RESET_INTERVAL) * TEXTURE_RESET_INTERVAL;
+            if (current_base > last_base) {
+                printf("[DEBUG] Texture %u crossed boundary (last: %u), resetting all buffers\n",
+                        buffer->texture, last_texture);
+                fflush(stdout);
+
+                // Move buffers to a temporary list for safe destruction
+                struct wl_list temp_list;
+                wl_list_init(&temp_list);
+                struct wlr_gles2_buffer *old_buffer, *tmp;
+                wl_list_for_each_safe(old_buffer, tmp, &renderer->buffers, link) {
+                    if (old_buffer != buffer) {
+                        printf("[DEBUG] Moving buffer %p (texture: %u) to temp list\n",
+                                old_buffer, old_buffer->texture);
+                        fflush(stdout);
+                        if (old_buffer->destroyed) {
+                            printf("[DEBUG] Buffer %p already destroyed, skipping\n", old_buffer);
+                            wl_list_remove(&old_buffer->link);
+                            continue;
+                        }
+                        wl_list_init(&old_buffer->link); // Clear link to prevent reuse
+                        wl_list_insert(&temp_list, &old_buffer->link);
+                    }
+                }
+
+                // In the buffer destruction loop
+wl_list_for_each_safe(old_buffer, tmp, &temp_list, link) {
+    // Make local copies of any data we need after removal
+    struct wlr_buffer *wlr_buffer = old_buffer->buffer;
+    bool already_destroyed = old_buffer->destroyed;
+    
+    // Skip already destroyed buffers
+    if (already_destroyed) {
+        wl_list_remove(&old_buffer->link);
+        continue;
+    }
+    
+    // Remove from list BEFORE any other operations
+    wl_list_remove(&old_buffer->link);
+    
+    // Zero out link pointers to ensure they're not used again
+    old_buffer->link.next = NULL;
+    old_buffer->link.prev = NULL;
+    
+    // Mark as destroyed
+    old_buffer->destroyed = true;
+    
+    // Unlock the buffer if needed (using our local copy)
+    if (wlr_buffer) {
+        wlr_buffer_unlock(wlr_buffer);
+        old_buffer->buffer = NULL; // Prevent double unlock
+    }
+    
+    // Destroy the buffer with extra validation
+    if (old_buffer) {
+        destroy_buffer(old_buffer);
+    }
+}
+
+                wl_list_init(&renderer->buffers);
+                wl_list_insert(&renderer->buffers, &buffer->link);
+                printf("[DEBUG] Reset complete at texture %u, count: %d\n",
+                        buffer->texture, wl_list_length(&renderer->buffers));
+                fflush(stdout);
+                wlr_log(WLR_DEBUG, "All buffers reset at texture %u, memory cleared", buffer->texture);
+            }
+            last_texture = buffer->texture; // Update last texture ID
+        }
+    } else {
+        printf("[DEBUG] Using existing buffer %p, texture: %u, count: %d\n",
+                buffer, buffer->texture, wl_list_length(&renderer->buffers));
+        fflush(stdout);
+    }
+
+    printf("[DEBUG] Step 7: Locking and binding buffer - buffer: %p, fbo: %u\n",
+           buffer, buffer->fbo);
+    fflush(stdout);
+    if (!buffer || buffer->fbo == 0) {
+        wlr_log(WLR_ERROR, "Invalid buffer or FBO in gles2_bind_buffer");
+        return false;
+    }
+    wlr_buffer_lock(wlr_buffer);
+    renderer->current_buffer = buffer;
+
+    push_gles2_debug(renderer);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Framebuffer incomplete in gles2_bind_buffer: 0x%x", status);
+        wlr_buffer_unlock(wlr_buffer);
+        renderer->current_buffer = NULL;
+        pop_gles2_debug(renderer);
+        return false;
+    }
+    pop_gles2_debug(renderer);
+
+    printf("[DEBUG] gles2_bind_buffer completed successfully\n");
+    fflush(stdout);
+    return true;
+}*/
+/*
+static bool gles2_bind_buffer(struct wlr_renderer *wlr_renderer,
+        struct wlr_buffer *wlr_buffer) {
+    struct wlr_gles2_renderer *renderer = gles2_get_renderer(wlr_renderer);
+    printf("[DEBUG] Entering gles2_bind_buffer - renderer: %p, wlr_buffer: %p, current_buffer: %p\n",
+           renderer, wlr_buffer, renderer->current_buffer);
+    fflush(stdout);
+
+    // Handle current buffer unbinding
+    if (renderer->current_buffer != NULL) {
+        printf("[DEBUG] Unbinding current buffer %p\n", renderer->current_buffer);
+        fflush(stdout);
+        assert(wlr_egl_is_current(renderer->egl));
+
+        push_gles2_debug(renderer);
+        glFlush();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        pop_gles2_debug(renderer);
+
+        if (renderer->current_buffer->buffer && !renderer->current_buffer->destroyed) {
+            wlr_buffer_unlock(renderer->current_buffer->buffer);
+            printf("[DEBUG] Unlocked buffer %p from current_buffer\n", renderer->current_buffer->buffer);
+            fflush(stdout);
+        }
+        renderer->current_buffer = NULL;
+    }
+
+    // Handle null buffer case (unbinding)
+    if (wlr_buffer == NULL) {
+        if (wlr_egl_is_current(renderer->egl)) {
+            push_gles2_debug(renderer);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glFlush();
+            pop_gles2_debug(renderer);
+            wlr_egl_unset_current(renderer->egl);
+        }
+        printf("[DEBUG] Null buffer, EGL context unset\n");
+        fflush(stdout);
+        return true;
+    }
+
+    // Make EGL context current for binding
+    printf("[DEBUG] Making EGL context current\n");
+    fflush(stdout);
+    if (!wlr_egl_make_current(renderer->egl)) {
+        wlr_log(WLR_ERROR, "Failed to make EGL context current in gles2_bind_buffer");
+        return false;
+    }
+
+    // Check buffer list validity
+    if (renderer->buffers.prev == NULL || renderer->buffers.next == NULL) {
+        wlr_log(WLR_DEBUG, "Buffer list invalid, reinitializing");
+        wl_list_init(&renderer->buffers);
+    }
+
+    // Try to find an existing buffer that matches our needs
+    struct wlr_gles2_buffer *buffer = get_buffer(renderer, wlr_buffer);
+    
+    // Implement buffer cache size management with texture-based reset
+    if (buffer == NULL) {
+        // Get buffer list size
+        int buffer_count = 0;
+        struct wlr_gles2_buffer *tmp;
+        wl_list_for_each(tmp, &renderer->buffers, link) {
+            if (!tmp->destroyed) buffer_count++;
+        }
+        
+        // Texture-based reset tracking
+        static GLuint last_texture = 0;
+        const int TEXTURE_RESET_INTERVAL = 5;
+
+        // Create new buffer and check for reset
+        printf("[DEBUG] Creating new buffer (current cache size: %d)\n", buffer_count);
+        fflush(stdout);
+        buffer = create_buffer(renderer, wlr_buffer);
+        if (buffer == NULL) {
+            wlr_log(WLR_ERROR, "Failed to create buffer in gles2_bind_buffer");
+            return false;
+        }
+        buffer->destroyed = false;
+        printf("[DEBUG] New buffer created - buffer: %p, texture: %u, fbo: %u\n",
+               buffer, buffer->texture, buffer->fbo);
+        fflush(stdout);
+
+        // Reset if we've exceeded the texture interval
+        if (buffer->texture >= last_texture + TEXTURE_RESET_INTERVAL) {
+            printf("[DEBUG] Texture %u exceeds last reset %u by interval %d, resetting all buffers\n",
+                   buffer->texture, last_texture, TEXTURE_RESET_INTERVAL);
+            fflush(stdout);
+
+            struct wl_list temp_list;
+            wl_list_init(&temp_list);
+            struct wlr_gles2_buffer *old_buffer;
+
+            // Move all buffers except the new one to temp_list
+            struct wl_list *pos = renderer->buffers.next;
+            while (pos != &renderer->buffers) {
+                old_buffer = wl_container_of(pos, old_buffer, link);
+                pos = pos->next; // Advance before removal
+                if (old_buffer != buffer && !old_buffer->destroyed) {
+                    printf("[DEBUG] Moving buffer %p (texture: %u) to temp list\n",
+                           old_buffer, old_buffer->texture);
+                    fflush(stdout);
+                    wl_list_remove(&old_buffer->link);
+                    wl_list_init(&old_buffer->link);
+                    wl_list_insert(&temp_list, &old_buffer->link);
+                }
+            }
+
+            // Destroy all buffers in temp_list with safety checks
+            while (!wl_list_empty(&temp_list)) {
+                old_buffer = wl_container_of(temp_list.next, old_buffer, link);
+                wl_list_remove(&old_buffer->link);
+                wl_list_init(&old_buffer->link);
+
+                if (!old_buffer || old_buffer->destroyed) {
+                    printf("[DEBUG] Skipping invalid or already destroyed buffer %p\n", old_buffer);
+                    fflush(stdout);
+                    continue;
+                }
+
+                printf("[DEBUG] Destroying buffer %p (texture: %u)\n", old_buffer, old_buffer->texture);
+                fflush(stdout);
+                if (old_buffer->buffer) {
+                    wlr_buffer_unlock(old_buffer->buffer);
+                }
+                destroy_buffer(old_buffer);
+            }
+
+            wl_list_init(&renderer->buffers);
+            wl_list_insert(&renderer->buffers, &buffer->link);
+            printf("[DEBUG] Reset complete at texture %u, count: %d\n",
+                   buffer->texture, wl_list_length(&renderer->buffers));
+            fflush(stdout);
+            wlr_log(WLR_DEBUG, "All buffers reset at texture %u, memory cleared", buffer->texture);
+            last_texture = buffer->texture;
+        }
+    } else {
+        printf("[DEBUG] Using cached buffer %p (texture: %u, fbo: %u)\n",
+               buffer, buffer->texture, buffer->fbo);
+        fflush(stdout);
+    }
+    
+    // Lock and bind the buffer
+    if (!buffer || buffer->fbo == 0 || buffer->destroyed) {
+        wlr_log(WLR_ERROR, "Invalid buffer or FBO in gles2_bind_buffer: buffer=%p, fbo=%u, destroyed=%d",
+                buffer, buffer ? buffer->fbo : 0, buffer ? buffer->destroyed : 0);
+        if (buffer && buffer->buffer && !buffer->destroyed) {
+            wlr_buffer_unlock(buffer->buffer);
+        }
+        return false;
+    }
+    
+    wlr_buffer_lock(wlr_buffer);
+    renderer->current_buffer = buffer;
+    push_gles2_debug(renderer);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        wlr_log(WLR_ERROR, "Framebuffer incomplete in gles2_bind_buffer: 0x%x", status);
+        wlr_buffer_unlock(wlr_buffer);
+        renderer->current_buffer = NULL;
+        pop_gles2_debug(renderer);
+        return false;
+    }
+    pop_gles2_debug(renderer);
+    printf("[DEBUG] gles2_bind_buffer completed successfully\n");
+    fflush(stdout);
+    return true;
+}*/
 
 
 static void gles2_begin(struct wlr_renderer *wlr_renderer, uint32_t width,

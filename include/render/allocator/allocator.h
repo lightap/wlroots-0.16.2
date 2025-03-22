@@ -70,11 +70,17 @@ struct rdp_buffer {
     struct wlr_buffer base;
     void *data; // Pointer to pixel data
     size_t stride;
+
+
+    bool in_use;           // Whether the buffer is currently locked/used
+    time_t last_used;      // Timestamp of last use for delayed destruction
+    struct wl_list link;   // Link in the pool's buffer list
+    struct rdp_buffer_pool *pool; // Pointer to owning pool
 };
 
 // Function declarations
 struct wlr_allocator *wlr_rdp_allocator_create(struct wlr_renderer *renderer);
-
+void wlr_rdp_allocator_cleanup(struct wlr_allocator *alloc);
 // Add this function declaration
 struct wlr_allocator *allocator_autocreate_with_drm_fd(
     struct wlr_backend *backend,

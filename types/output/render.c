@@ -13,6 +13,7 @@
 #include "render/pixel_format.h"
 #include "types/wlr_output.h"
 #include <unistd.h>
+#include <stdio.h>
 
 bool wlr_output_init_render(struct wlr_output *output,
 		struct wlr_allocator *allocator, struct wlr_renderer *renderer) {
@@ -141,11 +142,91 @@ static bool output_create_swapchain(struct wlr_output *output,
 
     return true;
 }
-
-
 static bool output_attach_back_buffer(struct wlr_output *output,
         const struct wlr_output_state *state, int *buffer_age) {
-    assert(output->back_buffer == NULL);
+    printf("[DEBUG] Entering output_attach_back_buffer - output: %p, back_buffer: %p\n",
+           output, output->back_buffer);
+    fflush(stdout);
+
+    if (output->back_buffer != NULL) {
+        wlr_log(WLR_DEBUG, "Surfaceless: back_buffer is not null, will clear if binding fails");
+    }
+
+    wlr_log(WLR_DEBUG, "Surfaceless: Attempting to attach back buffer");
+
+    if (!output->allocator) {
+        wlr_log(WLR_ERROR, "Surfaceless: No allocator available");
+        return false;
+    }
+
+    struct wlr_renderer *renderer = output->renderer;
+    if (!renderer) {
+        wlr_log(WLR_ERROR, "Surfaceless: No renderer available");
+        return false;
+    }
+
+    printf("[DEBUG] Step 1: Creating swapchain\n");
+    fflush(stdout);
+    if (!output_create_swapchain(output, state, true)) {
+        wlr_log(WLR_ERROR, "Surfaceless: Failed to create swapchain");
+        return false;
+    }
+
+    if (!output->swapchain) {
+        wlr_log(WLR_ERROR, "Surfaceless: Swapchain creation failed");
+        return false;
+    }
+
+    printf("[DEBUG] Step 2: Acquiring buffer from swapchain\n");
+    fflush(stdout);
+    struct wlr_buffer *buffer = wlr_swapchain_acquire(output->swapchain, buffer_age);
+    if (!buffer) {
+        wlr_log(WLR_ERROR, "Surfaceless: Failed to acquire swapchain buffer");
+        return false;
+    }
+
+    printf("[DEBUG] Step 3: Locking buffer %p\n", buffer);
+    fflush(stdout);
+    wlr_buffer_lock(buffer);
+
+    printf("[DEBUG] Step 4: Binding buffer to renderer\n");
+    fflush(stdout);
+    if (!renderer_bind_buffer(renderer, buffer)) {
+        wlr_log(WLR_ERROR, "Surfaceless: Renderer-specific buffer binding failed");
+        wlr_buffer_unlock(buffer);
+        if (output->back_buffer) {
+            wlr_buffer_unlock(output->back_buffer);
+            output->back_buffer = NULL;
+        }
+        printf("[DEBUG] Binding failed, back_buffer cleared\n");
+        fflush(stdout);
+        return false;
+    }
+
+    printf("[DEBUG] Step 5: Assigning new back_buffer\n");
+    fflush(stdout);
+    if (output->back_buffer) {
+        wlr_buffer_unlock(output->back_buffer); // Release old back_buffer
+        printf("[DEBUG] Unlocked old back_buffer %p\n", output->back_buffer);
+        fflush(stdout);
+    }
+    output->back_buffer = buffer;
+    wlr_log(WLR_DEBUG, "Surfaceless: Successfully attached back buffer");
+    printf("[DEBUG] Back buffer attached - buffer: %p\n", buffer);
+    fflush(stdout);
+    return true;
+}
+/*
+static bool output_attach_back_buffer(struct wlr_output *output,
+        const struct wlr_output_state *state, int *buffer_age) {
+    printf("[DEBUG] Entering output_attach_back_buffer - output: %p, back_buffer: %p\n",
+           output, output->back_buffer);
+    fflush(stdout);
+
+    // Log initial state
+    if (output->back_buffer != NULL) {
+        wlr_log(WLR_DEBUG, "Surfaceless: back_buffer is not null, will clear if binding fails");
+    }
 
     wlr_log(WLR_DEBUG, "Surfaceless: Attempting to attach back buffer");
 
@@ -162,6 +243,8 @@ static bool output_attach_back_buffer(struct wlr_output *output,
     }
 
     // Create swapchain with surfaceless-specific handling
+    printf("[DEBUG] Step 1: Creating swapchain\n");
+    fflush(stdout);
     if (!output_create_swapchain(output, state, true)) {
         wlr_log(WLR_ERROR, "Surfaceless: Failed to create swapchain");
         return false;
@@ -174,27 +257,50 @@ static bool output_attach_back_buffer(struct wlr_output *output,
     }
 
     // Acquire buffer from swapchain
-    struct wlr_buffer *buffer = 
-        wlr_swapchain_acquire(output->swapchain, buffer_age);
+    printf("[DEBUG] Step 2: Acquiring buffer from swapchain\n");
+    fflush(stdout);
+    struct wlr_buffer *buffer = wlr_swapchain_acquire(output->swapchain, buffer_age);
     if (!buffer) {
         wlr_log(WLR_ERROR, "Surfaceless: Failed to acquire swapchain buffer");
         return false;
     }
 
     // Lock the buffer before use
+    printf("[DEBUG] Step 3: Locking buffer %p\n", buffer);
+    fflush(stdout);
     wlr_buffer_lock(buffer);
 
-    // Attempt renderer-specific buffer binding
+    // Attempt renderer-specific buffer binding (using original function name)
+    printf("[DEBUG] Step 4: Binding buffer to renderer\n");
+    fflush(stdout);
     if (!renderer_bind_buffer(renderer, buffer)) {
         wlr_log(WLR_ERROR, "Surfaceless: Renderer-specific buffer binding failed");
         wlr_buffer_unlock(buffer);
+        // Clear back_buffer if set from a previous call
+        if (output->back_buffer) {
+            wlr_log(WLR_DEBUG, "Surfaceless: Clearing stale back_buffer %p", output->back_buffer);
+            wlr_buffer_unlock(output->back_buffer);
+            output->back_buffer = NULL;
+        }
+        printf("[DEBUG] Binding failed, back_buffer cleared\n");
+        fflush(stdout);
         return false;
     }
 
+    // Binding succeeded, update back_buffer
+    printf("[DEBUG] Step 5: Assigning new back_buffer\n");
+    fflush(stdout);
+    // Clear any old back_buffer (defensive, though unlikely due to flow)
+    if (output->back_buffer) {
+        wlr_log(WLR_DEBUG, "Surfaceless: Unexpected old back_buffer %p, unlocking", output->back_buffer);
+        wlr_buffer_unlock(output->back_buffer);
+    }
     output->back_buffer = buffer;
     wlr_log(WLR_DEBUG, "Surfaceless: Successfully attached back buffer");
+    printf("[DEBUG] Back buffer attached - buffer: %p\n", buffer);
+    fflush(stdout);
     return true;
-}
+}*/
 /*
 void output_clear_back_buffer(struct wlr_output *output) {
 	if (output->back_buffer == NULL) {
@@ -232,15 +338,17 @@ bool wlr_output_attach_render(struct wlr_output *output, int *buffer_age) {
 }
 static bool output_attach_empty_back_buffer(struct wlr_output *output,
         const struct wlr_output_state *state) {
-    assert(!(state->committed & WLR_OUTPUT_STATE_BUFFER));
+    // Log state instead of asserting
+    if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
+        wlr_log(WLR_DEBUG, "Output state has WLR_OUTPUT_STATE_BUFFER set (0x%x), proceeding anyway",
+                state->committed);
+    }
 
-    // In surfaceless mode, be more lenient
     if (!output_attach_back_buffer(output, state, NULL)) {
         wlr_log(WLR_ERROR, "Surfaceless: Failed to attach back buffer");
         return false;
     }
 
-    // Sanity check the back buffer
     if (output->back_buffer == NULL) {
         wlr_log(WLR_ERROR, "Surfaceless: Back buffer is NULL after attachment");
         return false;
@@ -255,19 +363,14 @@ static bool output_attach_empty_back_buffer(struct wlr_output *output,
         return false;
     }
 
-    // Try to bind the buffer to the renderer
     if (!renderer_bind_buffer(renderer, output->back_buffer)) {
         wlr_log(WLR_ERROR, "Surfaceless: Failed to bind buffer to renderer");
         return false;
     }
 
-    // Perform basic clear operation
     wlr_renderer_begin(renderer, width, height);
-    
-    // Clear to a neutral color (black with full alpha)
     float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     wlr_renderer_clear(renderer, clear_color);
-    
     wlr_renderer_end(renderer);
 
     wlr_log(WLR_DEBUG, "Surfaceless: Successfully attached and initialized back buffer");

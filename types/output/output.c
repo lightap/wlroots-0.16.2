@@ -720,7 +720,271 @@ bool wlr_output_test(struct wlr_output *output) {
 
 	return wlr_output_test_state(output, &state);
 }
+/*
+bool wlr_output_commit_state(struct wlr_output *output,
+		const struct wlr_output_state *state) {
+	uint32_t unchanged = output_compare_state(output, state);
 
+	// Create a shallow copy of the state with only the fields which have been
+	// changed and potentially a new buffer.
+	struct wlr_output_state pending = *state;
+	pending.committed &= ~unchanged;
+
+	if (!output_basic_test(output, &pending)) {
+		wlr_log(WLR_ERROR, "Basic output test failed for %s", output->name);
+		return false;
+	}
+
+	bool new_back_buffer = false;
+	if (!output_ensure_buffer(output, &pending, &new_back_buffer)) {
+		return false;
+	}
+	// Debug state before assertion
+	wlr_log(WLR_DEBUG, "Committing state - pending.committed: 0x%x", pending.committed);
+	if (new_back_buffer) {
+		assert((pending.committed & WLR_OUTPUT_STATE_BUFFER) == 0);
+		output_state_attach_buffer(&pending, output->back_buffer);
+		output_clear_back_buffer(output);
+	}
+
+	if ((pending.committed & WLR_OUTPUT_STATE_BUFFER) &&
+			output->idle_frame != NULL) {
+		wl_event_source_remove(output->idle_frame);
+		output->idle_frame = NULL;
+	}
+
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	struct wlr_output_event_precommit pre_event = {
+		.output = output,
+		.when = &now,
+		.state = &pending,
+	};
+	wl_signal_emit_mutable(&output->events.precommit, &pre_event);
+
+	if (!output->impl->commit(output, &pending)) {
+		if (new_back_buffer) {
+			wlr_buffer_unlock(pending.buffer);
+		}
+		return false;
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_BUFFER) {
+		struct wlr_output_cursor *cursor;
+		wl_list_for_each(cursor, &output->cursors, link) {
+			if (!cursor->enabled || !cursor->visible || cursor->surface == NULL) {
+				continue;
+			}
+			wlr_surface_send_frame_done(cursor->surface, &now);
+		}
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_RENDER_FORMAT) {
+		output->render_format = pending.render_format;
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_SUBPIXEL) {
+		output->subpixel = pending.subpixel;
+	}
+
+	output->commit_seq++;
+
+	bool scale_updated = pending.committed & WLR_OUTPUT_STATE_SCALE;
+	if (scale_updated) {
+		output->scale = pending.scale;
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_TRANSFORM) {
+		output->transform = pending.transform;
+		output_update_matrix(output);
+	}
+
+	bool geometry_updated = pending.committed &
+		(WLR_OUTPUT_STATE_MODE | WLR_OUTPUT_STATE_TRANSFORM |
+		WLR_OUTPUT_STATE_SUBPIXEL);
+	if (geometry_updated || scale_updated) {
+		struct wl_resource *resource;
+		wl_resource_for_each(resource, &output->resources) {
+			if (geometry_updated) {
+				send_geometry(resource);
+			}
+			if (scale_updated) {
+				send_scale(resource);
+			}
+		}
+		wlr_output_schedule_done(output);
+	}
+
+	// Destroy the swapchains when an output is disabled
+	if ((pending.committed & WLR_OUTPUT_STATE_ENABLED) && !pending.enabled) {
+		wlr_swapchain_destroy(output->swapchain);
+		output->swapchain = NULL;
+		wlr_swapchain_destroy(output->cursor_swapchain);
+		output->cursor_swapchain = NULL;
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_BUFFER) {
+		output->frame_pending = true;
+		output->needs_frame = false;
+	}
+
+	if ((pending.committed & WLR_OUTPUT_STATE_BUFFER) &&
+			output->swapchain != NULL) {
+		wlr_swapchain_set_buffer_submitted(output->swapchain, pending.buffer);
+	}
+
+	struct wlr_output_event_commit event = {
+		.output = output,
+		.committed = pending.committed,
+		.when = &now,
+		.buffer = (pending.committed & WLR_OUTPUT_STATE_BUFFER) ? pending.buffer : NULL,
+	};
+	wl_signal_emit_mutable(&output->events.commit, &event);
+
+	if (new_back_buffer) {
+		wlr_buffer_unlock(pending.buffer);
+	}
+
+	return true;
+}*/
+bool wlr_output_commit_state(struct wlr_output *output,
+		const struct wlr_output_state *state) {
+	uint32_t unchanged = output_compare_state(output, state);
+
+	// Create a shallow copy of the state with only the fields which have been
+	// changed and potentially a new buffer.
+	struct wlr_output_state pending = *state;
+	pending.committed &= ~unchanged;
+
+	if (!output_basic_test(output, &pending)) {
+		wlr_log(WLR_ERROR, "Basic output test failed for %s", output->name);
+		return false;
+	}
+
+	// Debug state before buffer operations
+	wlr_log(WLR_DEBUG, "Committing state before ensure_buffer - pending.committed: 0x%x", pending.committed);
+
+	bool new_back_buffer = false;
+	if (!output_ensure_buffer(output, &pending, &new_back_buffer)) {
+		return false;
+	}
+
+	// Handle new back buffer case
+	if (new_back_buffer) {
+		if (pending.committed & WLR_OUTPUT_STATE_BUFFER) {
+			wlr_log(WLR_DEBUG, "New back buffer attached but WLR_OUTPUT_STATE_BUFFER is set (0x%x), clearing it",
+					pending.committed);
+			pending.committed &= ~WLR_OUTPUT_STATE_BUFFER;
+			pending.buffer = NULL;
+		}
+		output_state_attach_buffer(&pending, output->back_buffer);
+		output_clear_back_buffer(output);
+	}
+
+	if ((pending.committed & WLR_OUTPUT_STATE_BUFFER) &&
+			output->idle_frame != NULL) {
+		wl_event_source_remove(output->idle_frame);
+		output->idle_frame = NULL;
+	}
+
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	struct wlr_output_event_precommit pre_event = {
+		.output = output,
+		.when = &now,
+		.state = &pending,
+	};
+	wl_signal_emit_mutable(&output->events.precommit, &pre_event);
+
+	if (!output->impl->commit(output, &pending)) {
+		if (new_back_buffer) {
+			wlr_buffer_unlock(pending.buffer);
+		}
+		return false;
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_BUFFER) {
+		struct wlr_output_cursor *cursor;
+		wl_list_for_each(cursor, &output->cursors, link) {
+			if (!cursor->enabled || !cursor->visible || cursor->surface == NULL) {
+				continue;
+			}
+			wlr_surface_send_frame_done(cursor->surface, &now);
+		}
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_RENDER_FORMAT) {
+		output->render_format = pending.render_format;
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_SUBPIXEL) {
+		output->subpixel = pending.subpixel;
+	}
+
+	output->commit_seq++;
+
+	bool scale_updated = pending.committed & WLR_OUTPUT_STATE_SCALE;
+	if (scale_updated) {
+		output->scale = pending.scale;
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_TRANSFORM) {
+		output->transform = pending.transform;
+		output_update_matrix(output);
+	}
+
+	bool geometry_updated = pending.committed &
+		(WLR_OUTPUT_STATE_MODE | WLR_OUTPUT_STATE_TRANSFORM |
+		WLR_OUTPUT_STATE_SUBPIXEL);
+	if (geometry_updated || scale_updated) {
+		struct wl_resource *resource;
+		wl_resource_for_each(resource, &output->resources) {
+			if (geometry_updated) {
+				send_geometry(resource);
+			}
+			if (scale_updated) {
+				send_scale(resource);
+			}
+		}
+		wlr_output_schedule_done(output);
+	}
+
+	// Destroy the swapchains when an output is disabled
+	if ((pending.committed & WLR_OUTPUT_STATE_ENABLED) && !pending.enabled) {
+		wlr_swapchain_destroy(output->swapchain);
+		output->swapchain = NULL;
+		wlr_swapchain_destroy(output->cursor_swapchain);
+		output->cursor_swapchain = NULL;
+	}
+
+	if (pending.committed & WLR_OUTPUT_STATE_BUFFER) {
+		output->frame_pending = true;
+		output->needs_frame = false;
+	}
+
+	if ((pending.committed & WLR_OUTPUT_STATE_BUFFER) &&
+			output->swapchain != NULL) {
+		wlr_swapchain_set_buffer_submitted(output->swapchain, pending.buffer);
+	}
+
+	struct wlr_output_event_commit event = {
+		.output = output,
+		.committed = pending.committed,
+		.when = &now,
+		.buffer = (pending.committed & WLR_OUTPUT_STATE_BUFFER) ? pending.buffer : NULL,
+	};
+	wl_signal_emit_mutable(&output->events.commit, &event);
+
+	if (new_back_buffer) {
+		wlr_buffer_unlock(pending.buffer);
+	}
+
+	return true;
+}
+
+/*
 bool wlr_output_commit_state(struct wlr_output *output,
 		const struct wlr_output_state *state) {
 	uint32_t unchanged = output_compare_state(output, state);
@@ -845,7 +1109,7 @@ bool wlr_output_commit_state(struct wlr_output *output,
 	}
 
 	return true;
-}
+}*/
 
 bool wlr_output_commit(struct wlr_output *output) {
 	// Make sure the pending state is cleared before the output is committed

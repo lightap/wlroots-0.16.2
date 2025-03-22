@@ -715,7 +715,7 @@ struct wlr_backend *wlr_RDP_backend_create(struct wl_display *display) {
     return &backend->backend;
 }*/
 
-
+/*//was before bug has a bug
 struct wlr_backend *wlr_RDP_backend_create(struct wl_display *display) {
     wlr_log(WLR_ERROR, "RDP Backend Creation - START");
 
@@ -790,7 +790,82 @@ struct wlr_backend *wlr_RDP_backend_create(struct wl_display *display) {
     wlr_log(WLR_ERROR, "RDP Backend Creation - COMPLETE");
     return &backend->backend;
 }
+*/
 
+struct wlr_backend *wlr_RDP_backend_create(struct wl_display *display) {
+    wlr_log(WLR_ERROR, "RDP Backend Creation - START");
+
+    set_global_rdp_peer(NULL);
+    rdp_connection_established = false;
+    init_rdp_peer_manager();
+
+    struct wlr_RDP_backend *backend = calloc(1, sizeof(*backend));
+    if (!backend) {
+        wlr_log(WLR_ERROR, "RDP Backend: Failed to allocate memory");
+        return NULL;
+    }
+
+    wlr_backend_init(&backend->backend, &rdp_backend_impl);
+    backend->display = display;
+    wl_list_init(&backend->outputs);
+    wl_list_init(&backend->peers);
+
+    backend->event_loop = wl_display_get_event_loop(display);
+    if (!backend->event_loop) {
+        wlr_log(WLR_ERROR, "Failed to get event loop");
+        free(backend);
+        return NULL;
+    }
+
+    backend->listener = freerdp_listener_new();
+    if (!backend->listener) {
+        wlr_log(WLR_ERROR, "RDP Backend: Failed to create listener");
+        free(backend);
+        return NULL;
+    }
+
+    backend->listener->info = backend;
+    backend->listener->PeerAccepted = rdp_incoming_peer;
+
+    if (!backend->listener->Open(backend->listener, NULL, 3389)) {
+        wlr_log(WLR_ERROR, "RDP Backend: Failed to open listener");
+        freerdp_listener_free(backend->listener);
+        free(backend);
+        return NULL;
+    }
+
+    void* rfds[32] = {0};
+    int rcount = 0;
+    
+    if (!backend->listener->GetFileDescriptor(backend->listener, rfds, &rcount)) {
+        wlr_log(WLR_ERROR, "Failed to get RDP file descriptors");
+        freerdp_listener_free(backend->listener);
+        free(backend);
+        return NULL;
+    }
+
+    backend->fd_count = 0;
+    for (int i = 0; i < rcount; i++) {
+        int fd = (int)(intptr_t)rfds[i];
+        struct wl_event_source *source = wl_event_loop_add_fd(
+            backend->event_loop, fd, WL_EVENT_READABLE,
+            rdp_listener_activity, backend->listener); // Line ~625
+        if (!source) {
+            wlr_log(WLR_ERROR, "Failed to add fd %d to event loop", fd);
+            for (int j = 0; j < backend->fd_count; j++) {
+                wl_event_source_remove(backend->fd_event_sources[j]);
+            }
+            freerdp_listener_free(backend->listener);
+            free(backend);
+            return NULL;
+        }
+        backend->fd_event_sources[backend->fd_count++] = source;
+        wlr_log(WLR_DEBUG, "Added RDP listener fd %d to event loop", fd);
+    }
+
+    wlr_log(WLR_ERROR, "RDP Backend Creation - COMPLETE");
+    return &backend->backend;
+}
 
 
 
@@ -1645,7 +1720,7 @@ static void rdp_backend_destroy(struct wlr_backend *wlr_backend) {
     wlr_backend_finish(wlr_backend);
     free(backend);
 }*/
-
+/*//was working before but has a bug
 static void rdp_backend_destroy(struct wlr_backend *wlr_backend) {
     struct wlr_RDP_backend *backend = RDP_backend_from_backend(wlr_backend);
     if (!backend) {
@@ -1689,6 +1764,35 @@ static void rdp_backend_destroy(struct wlr_backend *wlr_backend) {
     wlr_backend_finish(wlr_backend);
     free(backend);
     wlr_log(WLR_DEBUG, "RDP backend destroyed - check 'free' memory post-exit");
+}*/
+
+static void rdp_backend_destroy(struct wlr_backend *wlr_backend) {
+    struct wlr_RDP_backend *backend = (struct wlr_RDP_backend *)wlr_backend;
+    if (!backend) {
+        return;
+    }
+
+    // Free event sources
+    for (int i = 0; i < backend->fd_count; i++) {
+        if (backend->fd_event_sources[i]) {
+            wl_event_source_remove(backend->fd_event_sources[i]);
+            backend->fd_event_sources[i] = NULL;
+            wlr_log(WLR_INFO, "Removed RDP backend FD event source %d", i);
+        }
+    }
+    backend->fd_count = 0;
+
+    // Free listener
+    if (backend->listener) {
+        freerdp_listener_free(backend->listener);
+    }
+
+    // Clean up other resources
+    wl_list_remove(&backend->outputs);
+    wl_list_remove(&backend->peers);
+
+    free(backend);
+    wlr_log(WLR_INFO, "RDP backend destroyed");
 }
 
 static uint32_t rdp_backend_get_buffer_caps(struct wlr_backend *wlr_backend) {
